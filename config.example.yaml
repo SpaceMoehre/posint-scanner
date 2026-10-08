@@ -1,0 +1,172 @@
+# Copy to config.yaml and fill in. Every value here can also be set via
+# environment variable instead, named OSINT_<SOURCE>_<FIELD> (e.g.
+# OSINT_SHODAN_API_KEY) - useful for CI/secrets managers without storing keys
+# in a file. A source with a missing key is skipped at scan time with a
+# warning, not a hard failure. See README.md "Choosing which sources run".
+
+# Which categories run when a source's own `enabled:` isn't set.
+defaults:
+  passive: true   # resolvers / third-party APIs
+  scrape: false   # public HTML pages instead of a documented API (ToS/robots-sensitive)
+  active: true    # traffic straight to the target (ping, portscan, fingerprint)
+
+sources:
+  shodan:
+    api_key: ""
+    # Every source also accepts: enabled, ttl_days, daily_budget,
+    # monthly_budget, requests_per_minute (see README "Quotas").
+
+  censys:
+    api_id: ""
+    api_secret: ""
+
+  qualys_vmdr:
+    api_user: ""
+    api_password: ""
+    platform_url: "https://qualysapi.qualys.com"
+
+  # Keyless scraper stand-in for shodan: skipped while shodan has a key,
+  # unless `force: true`.
+  shodan_web:
+    enabled: false
+
+  # Subdomain discovery APIs. Keyless: crtsh, wayback, commoncrawl,
+  # hackertarget (api_key optional). Free-tier limits are pre-set as
+  # budgets - raise them for paid plans.
+  otx:
+    api_key: ""
+  virustotal:
+    api_key: ""
+    # max_pages: 5
+  securitytrails:
+    api_key: ""
+  fullhunt:
+    api_key: ""
+
+  # Also discovery + IP enrichment; all run keyless, keys raise allowances.
+  urlscan:
+    api_key: ""
+  netlas:
+    api_key: ""
+
+  # IP enrichment (context, reputation, related hostnames).
+  greynoise:
+    api_key: ""     # optional
+  ipinfo:
+    api_key: ""     # optional token
+  abuseipdb:
+    api_key: ""     # required
+
+  # Cloud storage bucket search: guess bucket names and check public exposure
+  # on S3/GCS/Azure. Active (probes cloud endpoints); off by default. `extra`
+  # adds bucket names to try beyond the domain-derived guesses.
+  bucketsearch:
+    enabled: false
+    # extra: ["acme-internal", "acme-prod-backups"]
+    # providers: ["s3", "gcs", "azure"]
+
+  # Public GitHub code naming the domain's hostnames/IPs (leaked configs,
+  # manifests, hardcoded endpoints) and secrets found in those files. Needs a
+  # token - any PAT works, no scopes required for public code search. Secret
+  # values are stored in full in the DB/exports/UI. gitleaks (if on PATH)
+  # augments the built-in secret rules. Found secrets are never verified.
+  github:
+    token: ""
+    # max_hits: 100          # files (with a hit) examined per search
+    # max_file_fetches: 50   # raw file downloads per call
+    # use_gitleaks: true     # also run gitleaks when it's on PATH
+    # use_trufflehog: false  # also run trufflehog (--no-verification) when on PATH
+    # deny_paths: ["*.md", "*vendor/*", ...]   # skipped unless a file has a secret
+    # skip_asns: [13335, ...]                  # CDN/shared networks not searched by IP
+
+  # Subdomain brute force: resolve <word>.<domain> from a wordlist against
+  # public resolvers. Off by default; point wordlist at a SecLists DNS list
+  # (or leave blank to try the common SecLists install paths).
+  dnsbrute:
+    enabled: false
+    wordlist: ""        # e.g. /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt
+    # workers: 50
+    # max_words: 100000
+
+  # Scrapers of public HTML pages.
+  rapiddns:
+    enabled: false
+  fullhunt_web:     # keyless stand-in for fullhunt; skipped while fullhunt has a key
+    enabled: false
+
+  # Email addresses at the domain (Email addresses section / *.emails.csv).
+  # theHarvester shells out to the `theHarvester` CLI (skipped when absent);
+  # `backends` is its -b list - `emails` = every source that yields addresses.
+  # Keys for its keyed backends go in theHarvester's own api-keys.yaml.
+  theharvester:
+    # backends: "emails"
+    # limit: 500
+    # timeout_seconds: 900
+  hunter:           # Hunter.io; free key: 25 searches/month, 10 addresses each
+    api_key: ""
+    # limit: 10     # up to 100 on a paid plan
+  tomba:            # Tomba.io; free key: 25 searches/month
+    api_key: ""
+    api_secret: ""
+  # pgp_keyserver: keyless (keyserver.ubuntu.com user IDs)
+
+  # Active source: detect unauthenticated container/orchestration control
+  # planes (Docker API, Kubernetes API, kubelet, registry). Off by default -
+  # probes non-standard ports directly. Any images an open registry lists are
+  # fed to the --cloud-scan Trivy stage.
+  container_exposure:
+    enabled: false
+
+nvd:
+  # Optional - NVD works with no key at all (5 requests/30s), a free key
+  # (nvd.nist.gov/developers/request-an-api-key) raises that to 50/30s.
+  api_key: ""
+
+nuclei:
+  # Active template scan (opt-in per scan with --nuclei or the dashboard's
+  # "nuclei scan" box; needs the `nuclei` binary on PATH). templates_dir is
+  # passed to `nuclei -t`; leave empty to use nuclei's own default template
+  # directory. The Docker image sets this to ~/nuclei-community, where `cent`
+  # has aggregated the community templates at build time.
+  # templates_dir: ""
+
+webscan:
+  # Active web-app & subdomain-takeover scans (see README "Web app &
+  # subdomain-takeover scans"). Three independent, opt-in stages, each needing
+  # its binary on PATH (skipped when absent):
+  #
+  #   --nikto    : Nikto web-server scan of every resolved web service.
+  #   --wpscan   : WPScan of every resolved web service (no-op off WordPress).
+  #   --takeover : subdomain-takeover check of every discovered hostname.
+  #
+  # wpscan_api_token unlocks WPScan's vulnerability database (also
+  # OSINT_WPSCAN_API_TOKEN); without it versions are enumerated but no CVEs.
+  # wpscan_api_token: ""
+  # nikto_extra_args: []       # e.g. ["-Tuning", "x6"]
+  # wpscan_extra_args: []      # e.g. ["--plugins-detection", "aggressive"]
+  # takeover_extra_args: []
+
+cloudscan:
+  # Detailed cloud scanning with Trivy, Checkov, Prowler and ScoutSuite. Two
+  # independent, opt-in stages (see README "Cloud scanning"):
+  #
+  #   --cloud-scan  : credential-free artifact scanning. Checkov + `trivy fs`
+  #                   on the public GitHub repos the github source found, and
+  #                   `trivy image` on container images (from an exposed
+  #                   registry, `images:` below, or guessed). Needs trivy/checkov.
+  #   --cloud-audit : authenticated account audit. Prowler + ScoutSuite against
+  #                   `providers`, using credentials from your environment
+  #                   (AWS_PROFILE, ~/.aws, gcloud/az logins, KUBECONFIG, ...).
+  #                   ONLY for accounts you're authorized to audit. Needs
+  #                   prowler/scout.
+  providers: ["aws"]          # aws | azure | gcp | kubernetes (also OSINT_CLOUDSCAN_PROVIDERS)
+  # repos: []                 # extra git URLs to clone + scan beyond discovered ones
+  # images: []                # extra container image references to trivy-scan
+  # guess_image_orgs: []      # orgs to guess <org>/<domain-label> images under
+  # trivy_extra_args: []      # e.g. ["--insecure"] for a plain-HTTP registry
+  # checkov_extra_args: []
+  # prowler_extra_args: []    # e.g. ["--compliance", "cis_2.0_aws"]
+  # scoutsuite_extra_args: []
+  # clone_timeout_seconds: 180
+  # max_repos: 25
+  # max_images: 25

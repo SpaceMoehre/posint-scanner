@@ -1,0 +1,7 @@
+{
+  "passive_dns": [
+    {"address": "203.0.113.10", "first": "2025-01-01T00:00:00", "last": "2026-09-01T00:00:00", "hostname": "vpn.example.com", "record_type": "A", "indicator_link": "/indicator/hostname/vpn.example.com", "flag_url": "", "flag_title": "", "asset_type": "hostname", "asn": "AS64500"},
+    {"address": "203.0.113.10", "first": "2024-03-01T00:00:00", "last": "2024-09-01T00:00:00", "hostname": "old-site.org", "record_type": "A", "indicator_link": "/indicator/hostname/old-site.org", "flag_url": "", "flag_title": "", "asset_type": "hostname", "asn": "AS64500"}
+  ],
+  "count": 2
+}

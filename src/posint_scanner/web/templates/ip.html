@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ ip.address }} · posint-scanner{% endblock %}
+{% block body %}
+<h1>{{ ip.address }}</h1>
+<p class="muted">First seen {{ ip.first_seen }} · last seen {{ ip.last_seen }}</p>
+
+{% if ip.code_exposures %}
+<h2>GitHub exposures ({{ ip.code_exposures|length }})</h2>
+{{ macros.exposures_table(ip.code_exposures) }}
+{% endif %}
+
+{% if ip.hostnames %}
+<h2>Hostnames pointing here ({{ ip.hostnames|length }})</h2>
+<table class="dt">
+  <thead><tr><th>Hostname</th><th>Also resolves to</th><th>Found by</th><th data-filter="select">TLS grade</th><th>First seen</th><th>Last seen</th></tr></thead>
+  <tbody>
+  {% for h in ip.hostnames %}
+  <tr id="host-{{ h.name }}">
+    <td><strong><a href="http://{{ h.name }}" target="_blank" rel="noopener noreferrer" title="open http://{{ h.name }}">{{ h.name }}</a></strong></td>
+    <td data-sort="{{ h.other_ips|length }}">{% for a in h.other_ips %}<a href="/ips/{{ a }}#host-{{ h.name }}">{{ a }}</a>{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">-</span>{% endfor %}</td>
+    <td class="muted">{{ h.found_by|join(", ") or "-" }}</td>
+    <td data-values="{{ h.tls_grade or '' }}">{{ h.tls_grade or "-" }}</td>
+    <td class="muted">{{ h.first_seen[:10] }}</td>
+    <td class="muted">{{ h.last_seen[:10] }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if ip.services %}
+<h2>Services</h2>
+<table>
+  <tr><th>Port</th><th>Product</th><th>Version</th><th>Banner</th></tr>
+  {% for s in ip.services %}
+  <tr>
+    <td><code>{{ s.port }}/{{ s.protocol }}</code>{% if s.web_url %} <a href="{{ s.web_url }}" target="_blank" rel="noopener noreferrer" title="{{ s.web_url }}">open ↗</a>{% endif %}</td>
+    <td>{{ s.banner.split("\n")[0] if s.banner else "-" }}</td>
+    <td>{{ s.version or "-" }}</td>
+    <td><pre style="margin:0; max-height:160px">{{ s.banner or "" }}</pre></td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if ip.nuclei %}
+<h2>Nuclei findings ({{ ip.nuclei|length }})</h2>
+<p class="note">Active template matches from Nuclei against this host's web services. These are confirmed by probing the target (not version-inferred).</p>
+<table class="dt">
+  <thead><tr><th>Severity</th><th>Template</th><th>Name</th><th>Matched at</th><th>CVE</th></tr></thead>
+  <tbody>
+  {% for f in ip.nuclei %}
+  <tr>
+    <td data-sort="{{ f.severity }}"><span class="badge b-{{ (f.severity or 'unknown')|upper }}">{{ f.severity or "unknown" }}</span></td>
+    <td><code>{{ f.template_id }}</code></td>
+    <td>{{ f.name or "-" }}</td>
+    <td class="muted"><a href="{{ f.matched_at }}" target="_blank" rel="noopener noreferrer">{{ f.matched_at }}</a></td>
+    <td>{% for c in f.cves %}<a href="https://nvd.nist.gov/vuln/detail/{{ c }}" target="_blank" rel="noopener">{{ c }}</a>{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if ip.web_findings %}
+<h2>Web app scan findings ({{ ip.web_findings|length }})</h2>
+<p class="note">Active findings from Nikto / WPScan against this host's web services. Confirmed by probing the target - only meaningful for hosts you're authorized to test.</p>
+<table class="dt">
+  <thead><tr><th data-filter="select">Severity</th><th data-filter="select">Tool</th><th>Check</th><th>Finding</th><th>Where</th><th>CVE</th></tr></thead>
+  <tbody>
+  {% for f in ip.web_findings %}
+  <tr>
+    <td data-sort="{{ f.severity }}"><span class="badge b-{{ (f.severity or 'unknown')|upper }}">{{ f.severity or "unknown" }}</span></td>
+    <td>{{ f.tool }}</td>
+    <td>{% if f.reference %}<a href="{{ f.reference }}" target="_blank" rel="noopener noreferrer"><code>{{ f.id or "-" }}</code></a>{% else %}<code>{{ f.id or "-" }}</code>{% endif %}</td>
+    <td>{{ (f.title or "")|truncate(120) }}</td>
+    <td class="muted" title="{{ f.location or '' }}">{{ (f.resource or "-")|truncate(60) }}</td>
+    <td>{% for c in f.cves %}<a href="https://nvd.nist.gov/vuln/detail/{{ c }}" target="_blank" rel="noopener">{{ c }}</a>{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if ip.container_exposures %}
+<h2>Container / orchestration exposure ({{ ip.container_exposures|length }})</h2>
+<p class="note">Unauthenticated container control-plane endpoints reachable on this host (Docker API, Kubernetes API, kubelet, registry). Actively probed - only meaningful for hosts you're authorized to test.</p>
+<table class="dt">
+  <thead><tr><th>Severity</th><th data-filter="select">Type</th><th>Port</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for e in ip.container_exposures %}
+  <tr>
+    <td data-sort="{{ e.severity }}"><span class="badge b-{{ (e.severity or 'unknown')|upper }}">{{ e.severity or "unknown" }}</span></td>
+    <td><code>{{ e.kind }}</code></td>
+    <td><code>{{ e.port }}</code></td>
+    <td>{{ e.detail }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if ip.vulns %}
+<h2>Known vulnerabilities</h2>
+<table>
+  <tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>Port</th><th>Component</th><th>Exploit</th><th>Summary</th></tr>
+  {% for v in ip.vulns %}
+  <tr>
+    <td><a href="https://nvd.nist.gov/vuln/detail/{{ v.cve_id }}" target="_blank" rel="noopener">{{ v.cve_id }}</a></td>
+    <td><span class="badge b-{{ v.severity }}">{{ v.severity }}</span></td>
+    <td>{{ v.cvss_score if v.cvss_score is not none else "-" }}</td>
+    <td><code>{{ v.port if v.port is not none else "-" }}</code></td>
+    <td>{{ v.technology or "-" }}</td>
+    <td data-values="{{ "exploit" if v.exploits else "" }}">
+      {% for e in v.exploits %}<a href="{{ e.url }}" target="_blank" rel="noopener" title="{{ e.title }}">EDB-{{ e.edb_id }}</a>{% if not loop.last %} {% endif %}{% else %}-{% endfor %}
+    </td>
+    <td>{{ (v.summary or "")[:220] }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2>Raw source results</h2>
+{% for r in ip.results %}
+<h3 style="font-size:14px; margin:14px 0 4px"><code>{{ r.source }}</code> <span class="muted">{{ r.fetched_at }}</span></h3>
+<pre>{{ r.data | tojson(indent=2) }}</pre>
+{% else %}<p class="muted">No source results.</p>{% endfor %}
+
+{% for h in ip.hostnames if h.results %}
+{% if loop.first %}<h2>Raw hostname results</h2>{% endif %}
+<details>
+  <summary><code>{{ h.name }}</code> <span class="muted">{{ h.results|map(attribute="source")|join(", ") }}</span></summary>
+  {% for r in h.results %}
+  <h3 style="font-size:14px; margin:14px 0 4px"><code>{{ r.source }}</code> <span class="muted">{{ r.fetched_at }}</span></h3>
+  <pre>{{ r.data | tojson(indent=2) }}</pre>
+  {% endfor %}
+</details>
+{% endfor %}
+{% endblock %}

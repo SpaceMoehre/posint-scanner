@@ -1,0 +1,7 @@
+{
+  "domain": "example.com",
+  "hosts": ["www.example.com", "vpn.example.com", "example.com", "cdn.otherdomain.net"],
+  "message": "",
+  "metadata": {"all_results_count": 4, "available_results_for_user": 4, "domain": "example.com", "last_scanned": 1758844800, "max_results_for_user": 3000, "timestamp": 1758844800, "user_plan": "free"},
+  "status": 200
+}

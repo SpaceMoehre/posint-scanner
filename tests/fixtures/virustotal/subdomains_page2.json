@@ -1,0 +1,7 @@
+{
+  "meta": {"count": 3},
+  "data": [
+    {"attributes": {"last_dns_records": [], "tld": "com"}, "type": "domain", "id": "dev.example.com", "links": {"self": "https://www.virustotal.com/api/v3/domains/dev.example.com"}}
+  ],
+  "links": {"self": "https://www.virustotal.com/api/v3/domains/example.com/subdomains?cursor=CURSOR-PAGE-2&limit=40"}
+}

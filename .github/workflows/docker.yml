@@ -1,0 +1,147 @@
+name: Docker Build & Push
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v1.2.3)'
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            INSTALL_NUCLEI=true
+            INSTALL_CLOUDSCAN=true
+            INSTALL_WEBSCAN=true
+            INSTALL_THEHARVESTER=true
+
+      - name: Output image info
+        run: |
+          echo "Image pushed: ${{ steps.meta.outputs.tags }}"
+          echo "Digest: ${{ steps.build.outputs.digest }}"
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull image
+        run: |
+          docker pull ${{ needs.build.outputs.image-tag }}
+
+      - name: Test CLI help
+        run: |
+          docker run --rm ${{ needs.build.outputs.image-tag }} posint-scanner --help
+
+      - name: Test scan dry-run
+        run: |
+          docker run --rm -v /tmp/test-db:/data \
+            ${{ needs.build.outputs.image-tag }} \
+            posint-scanner db init --db /data/test.db
+
+      - name: Test web server starts
+        run: |
+          docker run -d --name test-web \
+            -v /tmp/test-web:/data \
+            -p 127.0.0.1:8000:8000 \
+            ${{ needs.build.outputs.image-tag }}
+          sleep 5
+          curl -sf http://127.0.0.1:8000/ >/dev/null && echo "Web UI responding"
+          docker stop test-web
+          docker rm test-web
+
+  release:
+    needs: [build, test]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact metadata
+        run: echo "Build completed for tag: ${{ needs.build.outputs.image-tag }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Docker Image
+
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ```
+
+            ### Run the scanner
+            ```bash
+            # Web UI
+            docker run -d -p 8000:8000 \
+              -v $(pwd)/data:/data \
+              ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+
+            # CLI scan
+            docker run --rm -v $(pwd)/data:/data \
+              ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
+              posint-scanner scan example.com --db /data/posint.db
+            ```
+
+            ### Build arguments
+            - INSTALL_NUCLEI=true
+            - INSTALL_CLOUDSCAN=true
+            - INSTALL_WEBSCAN=true
+            - INSTALL_THEHARVESTER=true

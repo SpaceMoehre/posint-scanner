@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Security Overview · posint-scanner{% endblock %}
+{% block head %}
+<style>
+  .dtabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+  .dtabs a { padding: 4px 12px; border: 1px solid var(--border); border-radius: 20px; color: var(--muted); font-size: 13px; }
+  .dtabs a.on { background: var(--panel2); color: var(--fg); border-color: var(--link); }
+  .dtag { display: inline-block; padding: 0 7px; margin: 1px 2px 1px 0; border-radius: 4px; font-size: 12px; white-space: nowrap;
+          border-left: 3px solid hsl(var(--h), 70%, 60%); background: hsla(var(--h), 70%, 60%, .12); color: var(--fg); }
+  .dtag:hover { text-decoration: none; filter: brightness(1.2); }
+</style>
+{% endblock %}
+{% macro dtags(domains) -%}
+  {%- for d in domains %}<a class="dtag" style="--h: {{ (ov.domains.index(d) * 137) % 360 if d in ov.domains else 0 }}" href="/overview?domain={{ d|urlencode }}">{{ d }}</a>{% else %}<span class="muted">-</span>{% endfor -%}
+{%- endmacro %}
+{% macro hosts(names, ip) -%}
+  {%- for h in names[:3] %}<a href="/ips/{{ ip }}#host-{{ h }}">{{ h }}</a>{% if not loop.last %}, {% endif %}{% endfor %}{% if names|length > 3 %} <span class="muted" title="{{ names[3:]|join(', ') }}">+{{ names|length - 3 }}</span><span hidden>{{ names[3:]|join(', ') }}</span>{% endif %}{% if not names %}<span class="muted">-</span>{% endif -%}
+{%- endmacro %}
+{% block body %}
+<h1>Security Overview{% if ov.selected_domain %} · {{ ov.selected_domain }}{% endif %}</h1>
+<p class="muted">Hosts exposing services that generally should not be public, and hosts running software with known CVEs.</p>
+
+{% if ov.domains|length > 1 or ov.selected_domain %}
+<nav class="dtabs">
+  <a href="/overview" class="{{ 'on' if not ov.selected_domain }}">All domains</a>
+  {% for d in ov.domains %}<a href="/overview?domain={{ d|urlencode }}" class="{{ 'on' if d == ov.selected_domain }}">{{ d }}</a>{% endfor %}
+</nav>
+{% if ov.selected_domain and ov.unattributed_ips %}<p class="note">{{ ov.unattributed_ips }} IP(s) with no hostname (e.g. netblock-sweep hits) can't be attributed to a domain and only appear under "All domains".</p>{% endif %}
+{% endif %}
+
+<div class="stats">
+  <div class="stat"><div class="n">{{ ov.total_ips }}</div><div class="l">IPs scanned</div></div>
+  <div class="stat"><div class="n">{{ ov.hosts_with_exposure }}</div><div class="l">exposing sensitive svc</div></div>
+  <div class="stat"><div class="n">{{ ov.exposures|length }}</div><div class="l">exposures</div></div>
+  <div class="stat"><div class="n">{{ ov.hosts_with_vulns }}</div><div class="l">hosts with CVEs</div></div>
+  <div class="stat"><div class="n">{{ ov.criticals|length }}</div><div class="l">critical findings</div></div>
+</div>
+
+{% set rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "UNKNOWN": 0} %}
+<h2>Critical findings ({{ ov.criticals|length }})</h2>
+{% if ov.criticals %}
+<table class="dt">
+  <thead><tr><th>Finding</th><th data-filter="select">Domain</th><th>IP</th><th>Hostname(s)</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for c in ov.criticals %}
+  <tr>
+    <td data-sort="{{ c.rank }}"><strong>{{ c.kind }}</strong></td>
+    <td data-values="{{ c.domains|join('|') }}">{{ dtags(c.domains) }}</td>
+    <td><a href="/ips/{{ c.address }}">{{ c.address }}</a></td>
+    <td>{{ hosts(c.hostnames, c.address) }}</td>
+    <td>{{ c.detail }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">None. No SMBv1 exposure and no CVSS-critical CVEs found.</p>{% endif %}
+
+<h2>Exposed sensitive services ({{ ov.exposures|length }})</h2>
+{% if ov.exposures %}
+<table class="dt">
+  <thead><tr><th data-filter="select">Domain</th><th>IP</th><th>Hostname(s)</th><th>Port</th><th data-filter="select">Service</th><th>Banner / version</th><th>Why it matters</th></tr></thead>
+  <tbody>
+  {% for e in ov.exposures %}
+  <tr>
+    <td data-values="{{ e.domains|join('|') }}">{{ dtags(e.domains) }}</td>
+    <td><a href="/ips/{{ e.address }}">{{ e.address }}</a></td>
+    <td>{{ hosts(e.hostnames, e.address) }}</td>
+    <td data-sort="{{ e.port }}"><code>{{ e.port }}/{{ e.protocol }}</code></td>
+    <td>{{ e.service }}</td>
+    <td class="muted">{{ ((e.banner or "")|truncate(80)) or "-" }}{% if e.version %} <code>{{ e.version }}</code>{% endif %}</td>
+    <td class="muted">{{ e.reason }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">None found.</p>{% endif %}
+
+<h2>Hosts with known vulnerabilities ({{ ov.vuln_rows|length }})</h2>
+{% if ov.vuln_rows %}
+<table class="dt">
+  <thead><tr><th data-filter="select">Domain</th><th>IP</th><th>Hostname(s)</th><th>Port</th><th>Component</th><th>CVEs</th><th>Max CVSS</th><th data-filter="select">Worst</th></tr></thead>
+  <tbody>
+  {% for v in ov.vuln_rows %}
+  <tr>
+    <td data-values="{{ v.domains|join('|') }}">{{ dtags(v.domains) }}</td>
+    <td><a href="/ips/{{ v.address }}">{{ v.address }}</a></td>
+    <td>{{ hosts(v.hostnames, v.address) }}</td>
+    <td><code>{{ v.port if v.port is not none else "-" }}</code></td>
+    <td>{{ v.component }}</td>
+    <td>{{ v.cve_count }}</td>
+    <td>{{ "%.1f"|format(v.max_score) if v.max_score else "-" }}</td>
+    <td data-sort="{{ rank[v.worst] }}"><span class="badge b-{{ v.worst }}">{{ v.worst }}</span></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">None found.</p>{% endif %}
+
+<h2>All CVEs ({{ ov.cves|length }})</h2>
+{% if ov.cves %}
+<table class="dt">
+  <thead><tr><th data-filter="select">Domain</th><th>IP</th><th>Hostname(s)</th><th>Port</th><th>Component</th><th>CVE</th><th>CVSS</th><th data-filter="select">Severity</th><th>Summary</th></tr></thead>
+  <tbody>
+  {% for v in ov.cves %}
+  <tr>
+    <td data-values="{{ v.domains|join('|') }}">{{ dtags(v.domains) }}</td>
+    <td><a href="/ips/{{ v.address }}">{{ v.address }}</a></td>
+    <td>{{ hosts(v.hostnames, v.address) }}</td>
+    <td><code>{{ v.port if v.port is not none else "-" }}</code></td>
+    <td>{{ v.component }}</td>
+    <td><a href="https://nvd.nist.gov/vuln/detail/{{ v.cve_id }}" rel="noopener noreferrer">{{ v.cve_id }}</a></td>
+    <td>{{ "%.1f"|format(v.cvss_score) if v.cvss_score is not none else "-" }}</td>
+    <td data-sort="{{ rank[v.severity] }}"><span class="sev sev-{{ v.severity }}">{{ v.severity }}</span></td>
+    <td class="muted" title="{{ v.summary }}">{{ v.summary|truncate(140) }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">None found.</p>{% endif %}
+{% endblock %}

@@ -1,0 +1,177 @@
+{
+ "results": [
+  {
+   "canonical": {
+    "task": {
+     "url": "bookingadvisors.com"
+    },
+    "page": {
+     "url": "bookingadvisors.com"
+    }
+   },
+   "task": {
+    "visibility": "public",
+    "method": "automatic",
+    "domain": "www.bookingadvisors.com",
+    "apexDomain": "bookingadvisors.com",
+    "time": "2026-09-25T14:56:58.092Z",
+    "source": "certstream-suspicious",
+    "uuid": "01a0d911-8afe-7619-acb2-e7071167139d",
+    "url": "https://www.bookingadvisors.com/"
+   },
+   "stats": {
+    "uniqIPs": 22,
+    "uniqCountries": 3,
+    "dataLength": 53729627,
+    "encodedDataLength": 38777276,
+    "requests": 186
+   },
+   "page": {
+    "server": "cloudflare",
+    "ip": "104.21.28.24",
+    "apexDomainAgeDays": 3462,
+    "language": "en",
+    "mimeType": "text/html",
+    "title": "Booking Advisors",
+    "url": "https://www.bookingadvisors.com/",
+    "tlsValidDays": 90,
+    "tlsAgeDays": 54,
+    "domainAgeDays": 3462,
+    "tlsValidFrom": "2026-08-02T09:42:11.000Z",
+    "domain": "www.bookingadvisors.com",
+    "apexDomain": "bookingadvisors.com",
+    "asnname": "CLOUDFLARENET - Cloudflare, Inc., US",
+    "asn": "AS13335",
+    "tlsIssuer": "WE1",
+    "status": "200"
+   },
+   "labels": [],
+   "_id": "01a0d911-8afe-7619-acb2-e7071167139d",
+   "_score": null,
+   "sort": [
+    1790348218092,
+    "01a0d911-8afe-7619-acb2-e7071167139d"
+   ],
+   "result": "https://urlscan.io/api/v1/result/01a0d911-8afe-7619-acb2-e7071167139d/",
+   "screenshot": "https://urlscan.io/screenshots/01a0d911-8afe-7619-acb2-e7071167139d.png"
+  },
+  {
+   "canonical": {
+    "task": {
+     "url": "iana.org"
+    },
+    "page": {
+     "url": "iana.org"
+    }
+   },
+   "task": {
+    "visibility": "public",
+    "method": "api",
+    "domain": "www.iana.org",
+    "apexDomain": "iana.org",
+    "time": "2026-09-25T12:35:24.827Z",
+    "uuid": "01a0d890-1fd6-740a-9bbc-c21afc088bde",
+    "url": "https://www.iana.org/",
+    "tags": [
+     "hybridanalysis"
+    ]
+   },
+   "stats": {
+    "uniqIPs": 5,
+    "uniqCountries": 2,
+    "dataLength": 2841919,
+    "encodedDataLength": 1369472,
+    "requests": 17
+   },
+   "page": {
+    "country": "US",
+    "server": "cloudflare",
+    "ip": "2606:4700::6812:18e8",
+    "apexDomainAgeDays": 4917,
+    "language": "en",
+    "mimeType": "text/html",
+    "title": "Internet Assigned Numbers Authority",
+    "url": "https://www.iana.org/",
+    "tlsValidDays": 90,
+    "tlsAgeDays": 34,
+    "domainAgeDays": 3489,
+    "tlsValidFrom": "2026-08-21T20:51:32.000Z",
+    "domain": "www.iana.org",
+    "umbrellaRank": 135094,
+    "apexDomain": "iana.org",
+    "asnname": "CLOUDFLARENET - Cloudflare, Inc., US",
+    "asn": "AS13335",
+    "tlsIssuer": "WE1",
+    "status": "200"
+   },
+   "labels": [],
+   "_id": "01a0d890-1fd6-740a-9bbc-c21afc088bde",
+   "_score": null,
+   "sort": [
+    1790339724827,
+    "01a0d890-1fd6-740a-9bbc-c21afc088bde"
+   ],
+   "result": "https://urlscan.io/api/v1/result/01a0d890-1fd6-740a-9bbc-c21afc088bde/",
+   "screenshot": "https://urlscan.io/screenshots/01a0d890-1fd6-740a-9bbc-c21afc088bde.png"
+  },
+  {
+   "canonical": {
+    "task": {
+     "url": "iana.com"
+    },
+    "page": {
+     "url": "iana.org"
+    }
+   },
+   "task": {
+    "visibility": "public",
+    "method": "api",
+    "domain": "iana.com",
+    "apexDomain": "iana.com",
+    "time": "2026-09-25T10:12:13.652Z",
+    "uuid": "01a0d80d-0315-747b-b5f9-d5e859cdc0dc",
+    "url": "https://iana.com/"
+   },
+   "stats": {
+    "uniqIPs": 5,
+    "uniqCountries": 2,
+    "dataLength": 2841919,
+    "encodedDataLength": 1369524,
+    "requests": 17
+   },
+   "page": {
+    "server": "cloudflare",
+    "redirected": "off-domain",
+    "ip": "104.18.25.232",
+    "apexDomainAgeDays": 4917,
+    "language": "en",
+    "mimeType": "text/html",
+    "title": "Internet Assigned Numbers Authority",
+    "url": "https://www.iana.org/",
+    "tlsValidDays": 90,
+    "tlsAgeDays": 34,
+    "domainAgeDays": 3489,
+    "tlsValidFrom": "2026-08-21T20:51:32.000Z",
+    "domain": "www.iana.org",
+    "umbrellaRank": 135094,
+    "apexDomain": "iana.org",
+    "asnname": "CLOUDFLARENET - Cloudflare, Inc., US",
+    "asn": "AS13335",
+    "tlsIssuer": "WE1",
+    "status": "200"
+   },
+   "labels": [],
+   "_id": "01a0d80d-0315-747b-b5f9-d5e859cdc0dc",
+   "_score": null,
+   "sort": [
+    1790331133652,
+    "01a0d80d-0315-747b-b5f9-d5e859cdc0dc"
+   ],
+   "result": "https://urlscan.io/api/v1/result/01a0d80d-0315-747b-b5f9-d5e859cdc0dc/",
+   "screenshot": "https://urlscan.io/screenshots/01a0d80d-0315-747b-b5f9-d5e859cdc0dc.png"
+  }
+ ],
+ "total": 3683,
+ "took": 569,
+ "has_more": false
+}

@@ -1,0 +1,51 @@
+{
+  "total_count": 5,
+  "incomplete_results": false,
+  "items": [
+    {
+      "name": "nginx.conf",
+      "path": "deploy/nginx.conf",
+      "sha": "1111111111111111111111111111111111111111",
+      "html_url": "https://github.com/acme-dev/infra/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/deploy/nginx.conf",
+      "repository": {"full_name": "acme-dev/infra", "fork": false},
+      "text_matches": [{"object_type": "FileContent", "property": "content",
+                        "fragment": "    server_name api.example.com;\n    proxy_pass http://10.0.0.5;"}]
+    },
+    {
+      "name": "notes.txt",
+      "path": "notes.txt",
+      "sha": "2222222222222222222222222222222222222222",
+      "html_url": "https://github.com/someone/unrelated/blob/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/notes.txt",
+      "repository": {"full_name": "someone/unrelated", "fork": false},
+      "text_matches": [{"object_type": "FileContent", "property": "content",
+                        "fragment": "for example: com ports are listed"}]
+    },
+    {
+      "name": "nginx.conf",
+      "path": "deploy/nginx.conf",
+      "sha": "1111111111111111111111111111111111111111",
+      "html_url": "https://github.com/copycat/infra/blob/cccccccccccccccccccccccccccccccccccccccc/deploy/nginx.conf",
+      "repository": {"full_name": "copycat/infra", "fork": true},
+      "text_matches": [{"object_type": "FileContent", "property": "content",
+                        "fragment": "    server_name api.example.com;"}]
+    },
+    {
+      "name": "README.md",
+      "path": "README.md",
+      "sha": "3333333333333333333333333333333333333333",
+      "html_url": "https://github.com/acme-dev/website/blob/dddddddddddddddddddddddddddddddddddddddd/README.md",
+      "repository": {"full_name": "acme-dev/website", "fork": false},
+      "text_matches": [{"object_type": "FileContent", "property": "content",
+                        "fragment": "Live at https://www.example.com"}]
+    },
+    {
+      "name": ".env.production",
+      "path": "app/.env.production",
+      "sha": "4444444444444444444444444444444444444444",
+      "html_url": "https://github.com/acme-dev/app/blob/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/app/.env.production",
+      "repository": {"full_name": "acme-dev/app", "fork": false},
+      "text_matches": [{"object_type": "FileContent", "property": "content",
+                        "fragment": "DATABASE_URL=postgres://app:Pr0dS3cret!@db.internal.example.com:5432/app"}]
+    }
+  ]
+}

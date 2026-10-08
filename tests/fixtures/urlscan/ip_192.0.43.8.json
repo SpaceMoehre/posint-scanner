@@ -1,0 +1,290 @@
+{
+ "results": [
+  {
+   "canonical": {
+    "task": {
+     "url": "iana.com"
+    },
+    "page": {
+     "url": "iana.org"
+    }
+   },
+   "task": {
+    "visibility": "public",
+    "method": "api",
+    "domain": "iana.com",
+    "apexDomain": "iana.com",
+    "time": "2026-09-25T10:12:13.652Z",
+    "uuid": "01a0d80d-0315-747b-b5f9-d5e859cdc0dc",
+    "url": "https://iana.com/"
+   },
+   "stats": {
+    "uniqIPs": 5,
+    "uniqCountries": 2,
+    "dataLength": 2841919,
+    "encodedDataLength": 1369524,
+    "requests": 17
+   },
+   "page": {
+    "server": "cloudflare",
+    "redirected": "off-domain",
+    "ip": "104.18.25.232",
+    "apexDomainAgeDays": 4917,
+    "language": "en",
+    "mimeType": "text/html",
+    "title": "Internet Assigned Numbers Authority",
+    "url": "https://www.iana.org/",
+    "tlsValidDays": 90,
+    "tlsAgeDays": 34,
+    "domainAgeDays": 3489,
+    "tlsValidFrom": "2026-08-21T20:51:32.000Z",
+    "domain": "www.iana.org",
+    "umbrellaRank": 135094,
+    "apexDomain": "iana.org",
+    "asnname": "CLOUDFLARENET - Cloudflare, Inc., US",
+    "asn": "AS13335",
+    "tlsIssuer": "WE1",
+    "status": "200"
+   },
+   "labels": [],
+   "_id": "01a0d80d-0315-747b-b5f9-d5e859cdc0dc",
+   "_score": null,
+   "sort": [
+    1790331133652,
+    "01a0d80d-0315-747b-b5f9-d5e859cdc0dc"
+   ],
+   "result": "https://urlscan.io/api/v1/result/01a0d80d-0315-747b-b5f9-d5e859cdc0dc/",
+   "screenshot": "https://urlscan.io/screenshots/01a0d80d-0315-747b-b5f9-d5e859cdc0dc.png"
+  },
+  {
+   "canonical": {
+    "task": {
+     "url": "iana.com"
+    },
+    "page": {
+     "url": "iana.org"
+    }
+   },
+   "task": {
+    "visibility": "public",
+    "method": "api",
+    "domain": "iana.com",
+    "apexDomain": "iana.com",
+    "time": "2026-09-25T09:15:47.889Z",
+    "uuid": "01a0d7d9-5ce2-77ca-bf18-ebb5a16b13a4",
+    "url": "https://iana.com/"
+   },
+   "stats": {
+    "uniqIPs": 5,
+    "uniqCountries": 2,
+    "dataLength": 2841919,
+    "encodedDataLength": 1369031,
+    "requests": 17
+   },
+   "page": {
+    "server": "cloudflare",
+    "redirected": "off-domain",
+    "ip": "104.18.25.232",
+    "apexDomainAgeDays": 4917,
+    "language": "en",
+    "mimeType": "text/html",
+    "title": "Internet Assigned Numbers Authority",
+    "url": "https://www.iana.org/",
+    "tlsValidDays": 90,
+    "tlsAgeDays": 34,
+    "domainAgeDays": 3489,
+    "tlsValidFrom": "2026-08-21T20:51:32.000Z",
+    "domain": "www.iana.org",
+    "umbrellaRank": 135094,
+    "apexDomain": "iana.org",
+    "asnname": "CLOUDFLARENET - Cloudflare, Inc., US",
+    "asn": "AS13335",
+    "tlsIssuer": "WE1",
+    "status": "200"
+   },
+   "labels": [],
+   "_id": "01a0d7d9-5ce2-77ca-bf18-ebb5a16b13a4",
+   "_score": null,
+   "sort": [
+    1790327747889,
+    "01a0d7d9-5ce2-77ca-bf18-ebb5a16b13a4"
+   ],
+   "result": "https://urlscan.io/api/v1/result/01a0d7d9-5ce2-77ca-bf18-ebb5a16b13a4/",
+   "screenshot": "https://urlscan.io/screenshots/01a0d7d9-5ce2-77ca-bf18-ebb5a16b13a4.png"
+  },
+  {
+   "canonical": {
+    "task": {
+     "url": "iana.com"
+    },
+    "page": {
+     "url": "iana.org"
+    }
+   },
+   "task": {
+    "visibility": "public",
+    "method": "api",
+    "domain": "iana.com",
+    "apexDomain": "iana.com",
+    "time": "2026-09-25T08:14:28.531Z",
+    "uuid": "01a0d7a1-38d7-714c-925c-cc92fb9800b2",
+    "url": "https://iana.com/"
+   },
+   "stats": {
+    "uniqIPs": 5,
+    "uniqCountries": 2,
+    "dataLength": 2841919,
+    "encodedDataLength": 1369073,
+    "requests": 17
+   },
+   "page": {
+    "server": "cloudflare",
+    "redirected": "off-domain",
+    "ip": "104.18.25.232",
+    "apexDomainAgeDays": 4917,
+    "language": "en",
+    "mimeType": "text/html",
+    "title": "Internet Assigned Numbers Authority",
+    "url": "https://www.iana.org/",
+    "tlsValidDays": 90,
+    "tlsAgeDays": 34,
+    "domainAgeDays": 3489,
+    "tlsValidFrom": "2026-08-21T20:51:32.000Z",
+    "domain": "www.iana.org",
+    "umbrellaRank": 135094,
+    "apexDomain": "iana.org",
+    "asnname": "CLOUDFLARENET - Cloudflare, Inc., US",
+    "asn": "AS13335",
+    "tlsIssuer": "WE1",
+    "status": "200"
+   },
+   "labels": [],
+   "_id": "01a0d7a1-38d7-714c-925c-cc92fb9800b2",
+   "_score": null,
+   "sort": [
+    1790324068531,
+    "01a0d7a1-38d7-714c-925c-cc92fb9800b2"
+   ],
+   "result": "https://urlscan.io/api/v1/result/01a0d7a1-38d7-714c-925c-cc92fb9800b2/",
+   "screenshot": "https://urlscan.io/screenshots/01a0d7a1-38d7-714c-925c-cc92fb9800b2.png"
+  },
+  {
+   "canonical": {
+    "task": {
+     "url": "iana.com"
+    },
+    "page": {
+     "url": "iana.org"
+    }
+   },
+   "task": {
+    "visibility": "public",
+    "method": "api",
+    "domain": "iana.com",
+    "apexDomain": "iana.com",
+    "time": "2026-09-25T07:01:52.944Z",
+    "uuid": "01a0d75e-c329-7423-b0f1-9eefcc5e0816",
+    "url": "https://iana.com/"
+   },
+   "stats": {
+    "uniqIPs": 5,
+    "uniqCountries": 2,
+    "dataLength": 2841920,
+    "encodedDataLength": 1369529,
+    "requests": 17
+   },
+   "page": {
+    "server": "cloudflare",
+    "redirected": "off-domain",
+    "ip": "104.18.25.232",
+    "apexDomainAgeDays": 4917,
+    "language": "en",
+    "mimeType": "text/html",
+    "title": "Internet Assigned Numbers Authority",
+    "url": "https://www.iana.org/",
+    "tlsValidDays": 90,
+    "tlsAgeDays": 34,
+    "domainAgeDays": 3489,
+    "tlsValidFrom": "2026-08-21T20:51:32.000Z",
+    "domain": "www.iana.org",
+    "umbrellaRank": 135094,
+    "apexDomain": "iana.org",
+    "asnname": "CLOUDFLARENET - Cloudflare, Inc., US",
+    "asn": "AS13335",
+    "tlsIssuer": "WE1",
+    "status": "200"
+   },
+   "labels": [],
+   "_id": "01a0d75e-c329-7423-b0f1-9eefcc5e0816",
+   "_score": null,
+   "sort": [
+    1790319712944,
+    "01a0d75e-c329-7423-b0f1-9eefcc5e0816"
+   ],
+   "result": "https://urlscan.io/api/v1/result/01a0d75e-c329-7423-b0f1-9eefcc5e0816/",
+   "screenshot": "https://urlscan.io/screenshots/01a0d75e-c329-7423-b0f1-9eefcc5e0816.png"
+  },
+  {
+   "canonical": {
+    "task": {
+     "url": "iana.org"
+    },
+    "page": {
+     "url": "iana.org"
+    }
+   },
+   "task": {
+    "visibility": "public",
+    "method": "api",
+    "domain": "iana.org",
+    "apexDomain": "iana.org",
+    "time": "2026-09-19T04:09:43.666Z",
+    "uuid": "01a0b7da-fba9-74ca-9098-83fdabb452d0",
+    "url": "http://iana.org/",
+    "tags": [
+     "tranco_l76g4"
+    ]
+   },
+   "stats": {
+    "uniqIPs": 5,
+    "uniqCountries": 2,
+    "dataLength": 2845252,
+    "encodedDataLength": 1370621,
+    "requests": 17
+   },
+   "page": {
+    "server": "cloudflare",
+    "redirected": "parent-domain",
+    "ip": "104.18.25.232",
+    "apexDomainAgeDays": 4911,
+    "language": "en",
+    "mimeType": "text/html",
+    "title": "Internet Assigned Numbers Authority",
+    "url": "https://www.iana.org/",
+    "tlsValidDays": 90,
+    "tlsAgeDays": 28,
+    "domainAgeDays": 3483,
+    "tlsValidFrom": "2026-08-21T20:51:32.000Z",
+    "domain": "www.iana.org",
+    "umbrellaRank": 142211,
+    "apexDomain": "iana.org",
+    "asnname": "CLOUDFLARENET - Cloudflare, Inc., US",
+    "asn": "AS13335",
+    "tlsIssuer": "WE1",
+    "status": "200"
+   },
+   "labels": [],
+   "_id": "01a0b7da-fba9-74ca-9098-83fdabb452d0",
+   "_score": null,
+   "sort": [
+    1789790983666,
+    "01a0b7da-fba9-74ca-9098-83fdabb452d0"
+   ],
+   "result": "https://urlscan.io/api/v1/result/01a0b7da-fba9-74ca-9098-83fdabb452d0/",
+   "screenshot": "https://urlscan.io/screenshots/01a0b7da-fba9-74ca-9098-83fdabb452d0.png"
+  }
+ ],
+ "total": 103,
+ "took": 337,
+ "has_more": false
+}

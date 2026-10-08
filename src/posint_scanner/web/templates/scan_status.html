@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Scan {{ job.domain }} · posint-scanner{% endblock %}
+{% block head %}
+{% if job.status in ("pending", "running", "cancelling") %}<meta http-equiv="refresh" content="3">{% endif %}
+{% endblock %}
+{% block body %}
+<h1>Scan: {{ job.domain }}</h1>
+<div class="card">
+  <p>Status: <span class="st st-{{ job.status }}">{{ job.status }}</span></p>
+  <p class="muted">Created {{ job.created_at }}{% if job.started_at %} · started {{ job.started_at }}{% endif %}{% if job.finished_at %} · finished {{ job.finished_at }}{% endif %}</p>
+  {% if job.status in ("pending", "running", "cancelling") %}
+    {% if job.stage %}<p>Currently: <strong>{{ job.stage }}</strong>{% if job.detail %} <span class="muted">{{ job.detail }}</span>{% endif %}</p>{% endif %}
+    <p class="note">This page refreshes automatically. A full scan (netblock sweep + enrichment + fingerprint + CVE lookup) can take several minutes.</p>
+    {% if job.status == "cancelling" %}<p class="muted">Cancelling - finishing the current step…</p>
+    {% else %}
+    <form method="post" action="/scans/{{ job.id }}/cancel"><button type="submit">Cancel scan</button></form>
+    {% endif %}
+  {% elif job.status == "cancelled" %}
+    <p class="st-failed">Cancelled.</p>
+    <p>Partial results (up to the {{ job.stage }} stage) are saved. See <a href="/domains/{{ job.domain }}">{{ job.domain }}</a>.</p>
+  {% elif job.status == "completed" %}
+    <p>Done. See the <a href="/overview">Security Overview</a> or the <a href="/domains/{{ job.domain }}">{{ job.domain }}</a> hostnames.</p>
+  {% elif job.status == "failed" %}
+    <p class="st-failed">Failed.</p>
+    <pre>{{ job.error }}</pre>
+  {% endif %}
+</div>
+<p><a href="/">← Dashboard</a></p>
+{% endblock %}

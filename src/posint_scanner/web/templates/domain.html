@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ d.name }} · posint-scanner{% endblock %}
+{% block body %}
+{% set rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "UNKNOWN": 0} %}
+{% set secret_count = d.code_exposures | selectattr("kind", "equalto", "secret") | list | length %}
+<h1>{{ d.name }}</h1>
+<p><a href="/overview?domain={{ d.name|urlencode }}">Security overview for this domain →</a></p>
+
+<div class="stats">
+  <div class="stat"><div class="n">{{ d.hostnames|length }}</div><div class="l">hostnames</div></div>
+  <div class="stat"><div class="n">{{ d.ip_count }}</div><div class="l">IP addresses</div></div>
+  <div class="stat"><div class="n">{{ d.services|length }}</div><div class="l">open services</div></div>
+  <div class="stat"><div class="n">{{ d.cloud_assets|length }}</div><div class="l">cloud buckets</div></div>
+  <div class="stat"><div class="n">{{ d.code_exposures|length }}</div><div class="l">code refs</div></div>
+  <div class="stat"><div class="n">{{ secret_count }}</div><div class="l">secrets</div></div>
+  <div class="stat"><div class="n">{{ d.email_addresses|length }}</div><div class="l">email addresses</div></div>
+</div>
+
+<h2>Hostnames ({{ d.hostnames|length }})</h2>
+{% if d.hostnames %}
+<table class="dt">
+  <thead><tr><th>Hostname</th><th>IPs</th><th>Open ports</th><th data-filter="select">Sensitive</th><th>CVEs</th><th data-filter="select">Worst</th><th>First seen</th><th>Last seen</th></tr></thead>
+  <tbody>
+  {% for h in d.hostnames %}
+  <tr>
+    <td><a href="{{ '/ips/%s#host-%s'|format(h.ips[0], h.name) if h.ips else '/hosts/' ~ h.name }}">{{ h.name }}</a></td>
+    <td data-sort="{{ h.ips|length }}">{% for a in h.ips %}<a href="/ips/{{ a }}">{{ a }}</a>{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">unresolved</span>{% endfor %}</td>
+    <td data-sort="{{ h.ports|length }}">{% if h.ports %}<code>{{ h.ports|join(", ") }}</code>{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td data-values="{{ h.sensitive|join('|') }}">{% if h.sensitive %}<span class="st st-failed">{{ h.sensitive|join(", ") }}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td>{{ h.cve_count or "-" }}</td>
+    <td data-sort="{{ rank[h.worst] if h.worst else '' }}" data-values="{{ h.worst or '' }}">{% if h.worst %}<span class="badge b-{{ h.worst }}">{{ h.worst }}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td class="muted">{{ h.first_seen[:10] }}</td>
+    <td class="muted">{{ h.last_seen[:10] }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">No hostnames discovered.</p>{% endif %}
+
+<h2>Services ({{ d.services|length }})</h2>
+{% if d.services %}
+<table class="dt">
+  <thead><tr><th>IP</th><th>Hostname(s)</th><th>Port</th><th data-filter="select">Proto</th><th>Banner</th><th>Version</th><th>CPE</th><th data-filter="select">Sensitive</th><th>Last seen</th></tr></thead>
+  <tbody>
+  {% for s in d.services %}
+  <tr>
+    <td><a href="/ips/{{ s.address }}">{{ s.address }}</a></td>
+    <td>{% for h in s.hostnames[:3] %}<a href="/ips/{{ s.address }}#host-{{ h }}">{{ h }}</a>{% if not loop.last %}, {% endif %}{% endfor %}{% if s.hostnames|length > 3 %} <span class="muted" title="{{ s.hostnames[3:]|join(', ') }}">+{{ s.hostnames|length - 3 }}</span><span hidden>{{ s.hostnames[3:]|join(', ') }}</span>{% endif %}</td>
+    <td><code>{{ s.port }}</code></td>
+    <td>{{ s.protocol }}</td>
+    <td class="muted" title="{{ s.banner or '' }}">{{ ((s.banner or "")|truncate(80)) or "-" }}</td>
+    <td>{{ s.version or "-" }}</td>
+    <td class="muted">{{ s.cpe or "-" }}</td>
+    <td data-values="{{ s.sensitive or '' }}">{% if s.sensitive %}<span class="st st-failed">{{ s.sensitive }}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td class="muted">{{ s.last_seen[:10] }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">No open services recorded.</p>{% endif %}
+
+{% if d.cloud_assets %}
+<h2>Cloud storage ({{ d.cloud_assets|length }})</h2>
+<table class="dt">
+  <thead><tr><th data-filter="select">Provider</th><th>Bucket</th><th data-filter="select">Exposure</th><th data-filter="select">Source</th><th>Last seen</th></tr></thead>
+  <tbody>
+  {% for a in d.cloud_assets %}
+  <tr>
+    <td>{{ a.provider }}</td>
+    <td><a href="{{ a.url }}" rel="noopener noreferrer">{{ a.name }}</a></td>
+    <td>{% if a.exposure == "public" %}<span class="st st-failed">public</span>{% else %}<span class="muted">{{ a.exposure }}</span>{% endif %}</td>
+    <td class="muted">{{ a.source }}</td>
+    <td class="muted">{{ a.last_seen[:10] }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if d.email_addresses %}
+<h2>Email addresses ({{ d.email_addresses|length }})</h2>
+<p class="note">Addresses at this domain from theHarvester, Hunter.io, Tomba.io and PGP keyservers - phishing/password-spraying exposure. Not verified as deliverable.</p>
+<table class="dt">
+  <thead><tr><th>Address</th><th>Name</th><th>Position</th><th>Confidence</th><th data-filter="select">Sources</th><th>Last seen</th></tr></thead>
+  <tbody>
+  {% for e in d.email_addresses %}
+  <tr>
+    <td>{% if e.url %}<a href="{{ e.url }}" rel="noopener noreferrer">{{ e.address }}</a>{% else %}{{ e.address }}{% endif %}</td>
+    <td>{{ e.name or "" }}</td>
+    <td class="muted">{{ e.position or "" }}</td>
+    <td class="muted">{{ e.confidence if e.confidence is not none else "" }}</td>
+    <td class="muted">{{ e.sources }}</td>
+    <td class="muted">{{ e.last_seen[:10] }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if d.takeovers %}
+<h2>Subdomain takeover ({{ d.takeovers|length }})</h2>
+<p class="note">Hostnames with a dangling CNAME pointing at a claimable service (from edoardottt/takeover). A claimed service lets an attacker serve content from your subdomain - verify and de-provision or reclaim promptly.</p>
+<table class="dt">
+  <thead><tr><th>Severity</th><th>Hostname</th><th>Service</th><th>CNAME</th></tr></thead>
+  <tbody>
+  {% for f in d.takeovers %}
+  <tr>
+    <td data-sort="{{ f.severity }}"><span class="badge b-{{ (f.severity or 'unknown')|upper }}">{{ f.severity or "unknown" }}</span></td>
+    <td><code>{{ f.resource }}</code></td>
+    <td>{{ f.id or "-" }}</td>
+    <td class="muted">{{ f.location or "-" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if d.cloud_findings %}
+<h2>Cloud &amp; IaC findings ({{ d.cloud_findings|length }})</h2>
+<p class="note">From Trivy / Checkov (public repos &amp; container images) and Prowler / ScoutSuite (cloud account audit). Confirm ownership of any scanned artifact or account before acting.</p>
+<table class="dt">
+  <thead><tr><th data-filter="select">Severity</th><th data-filter="select">Tool</th><th data-filter="select">Kind</th><th>Check</th><th>Title</th><th>Resource</th><th>Target</th></tr></thead>
+  <tbody>
+  {% for f in d.cloud_findings %}
+  <tr>
+    <td data-sort="{{ f.severity }}"><span class="badge b-{{ (f.severity or 'unknown')|upper }}">{{ f.severity or "unknown" }}</span></td>
+    <td>{{ f.tool }}</td>
+    <td>{{ f.kind }}</td>
+    <td>{% if f.reference %}<a href="{{ f.reference }}" target="_blank" rel="noopener noreferrer"><code>{{ f.id or "-" }}</code></a>{% else %}<code>{{ f.id or "-" }}</code>{% endif %}</td>
+    <td>{{ (f.title or "")|truncate(120) }}</td>
+    <td class="muted" title="{{ f.location or '' }}">{{ (f.resource or "-")|truncate(60) }}</td>
+    <td class="muted">{{ f.target|truncate(50) }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if d.code_exposures %}
+<h2>GitHub exposures ({{ d.code_exposures|length }}{% if secret_count %}, {{ secret_count }} secret{{ "s" if secret_count != 1 }}{% endif %})</h2>
+<p class="note">Public code naming this domain's hosts/IPs, and secrets found in those files. Secret values are shown in full - treat this page as sensitive.</p>
+{{ macros.exposures_table(d.code_exposures) }}
+{% endif %}
+
+{% if d.origin and d.origin.behind_cdn and d.origin.origin_candidates %}
+<h2>Possible origin IPs behind {{ d.origin.cdn }} ({{ d.origin.origin_candidates|length }})</h2>
+<p class="note">This domain is fronted by {{ d.origin.cdn }} ({{ d.origin.frontend_ips|join(", ") }}), but its own DNS (mail, SPF, direct-connect subdomains) points at these non-CDN IPs - candidate real origin servers that may bypass the WAF. Verify before relying on them.</p>
+<table class="dt">
+  <thead><tr><th>Candidate origin IP</th><th>Leaked via</th></tr></thead>
+  <tbody>
+  {% for c in d.origin.origin_candidates %}
+  <tr>
+    <td><a href="/ips/{{ c.ip }}">{{ c.ip }}</a></td>
+    <td class="muted">{{ c.via|join(", ") }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if d.lookalikes %}
+<h2>Registered look-alike domains ({{ d.lookalikes|length }})</h2>
+<p class="note">Typosquat / homoglyph permutations of this domain that resolve or accept mail - possible impersonation or phishing infrastructure. <strong>Not owned by you and never scanned</strong>; investigate ownership before acting.</p>
+<table class="dt">
+  <thead><tr><th>Look-alike</th><th>Resolves to</th><th data-filter="select">Has MX</th></tr></thead>
+  <tbody>
+  {% for l in d.lookalikes %}
+  <tr>
+    <td>{{ l.name }}</td>
+    <td class="muted">{{ l.addresses|join(", ") or "-" }}</td>
+    <td data-values="{{ "yes" if l.mx else "no" }}">{{ "yes" if l.mx else "-" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if d.results %}
+<h2>Domain data</h2>
+{% for r in d.results %}
+<h3 style="font-size:14px; margin:14px 0 4px"><code>{{ r.source }}</code> <span class="muted">{{ r.fetched_at }}</span></h3>
+<pre>{{ r.data | tojson(indent=2) }}</pre>
+{% endfor %}
+{% endif %}
+
+{% if d.candidates %}
+<h2>Candidate domains ({{ d.candidates|length }})</h2>
+<p class="note">Other domains sources related to this one's hosts (reverse IP, PTR, shared certificates). Not scanned - review ownership before scanning any of them.</p>
+<table class="dt">
+  <thead><tr><th>Domain</th><th data-filter="select">Source</th><th>Seen via</th><th data-filter="none"></th></tr></thead>
+  <tbody>
+  {% for c in d.candidates %}
+  <tr>
+    <td>{% if c.scanned %}<a href="/domains/{{ c.name }}">{{ c.name }}</a>{% else %}{{ c.name }}{% endif %}</td>
+    <td>{{ c.source }}</td>
+    <td class="muted">{{ c.via }}</td>
+    <td>{% if c.scanned %}<span class="muted">scanned</span>{% else %}
+      <form class="inline" method="post" action="/scans">
+        <input type="hidden" name="domain" value="{{ c.name }}">
+        <input type="hidden" name="netblock_sweep" value="on">
+        <input type="hidden" name="vuln_lookup" value="on">
+        {% if active_default %}<input type="hidden" name="fingerprint" value="on">{% endif %}
+        <button type="submit">Scan</button>
+      </form>
+    {% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

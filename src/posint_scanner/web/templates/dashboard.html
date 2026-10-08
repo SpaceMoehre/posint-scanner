@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Dashboard</h1>
+
+<div class="stats">
+  <div class="stat"><div class="n">{{ data.domains|length }}</div><div class="l">domains</div></div>
+  <div class="stat"><div class="n">{{ data.total_hosts }}</div><div class="l">hostnames</div></div>
+  <div class="stat"><div class="n">{{ data.total_ips }}</div><div class="l">IP addresses</div></div>
+</div>
+
+<h2>Start a scan</h2>
+<div class="card">
+  <form class="scan" method="post" action="/scans">
+    <div style="margin-bottom:12px">
+      <input type="text" name="domain" placeholder="example.com" required autofocus>
+      <button type="submit">Scan</button>
+    </div>
+    <input type="hidden" name="sources_form" value="1">
+    {% for category in ["passive", "scrape", "active"] %}
+    <div class="source-group">
+      <span class="muted">{{ category }}:</span>
+      {% for s in sources if s.category == category %}
+      <label title="{% if not s.configured %}not configured (no API key) - will be skipped{% elif s.fallback_for %}keyless stand-in for {{ s.fallback_for }}{% endif %}"><input type="checkbox" name="source" value="{{ s.name }}"{% if s.enabled %} checked{% endif %}> {{ s.name }}{% if not s.configured %} <span class="muted">(no key)</span>{% endif %}</label>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    <div class="source-group">
+      <span class="muted">stages:</span>
+      <label><input type="checkbox" name="fingerprint"{% if active_default %} checked{% endif %}> tech fingerprint</label>
+      <label><input type="checkbox" name="netblock_sweep" checked> netblock sweep</label>
+      <label><input type="checkbox" name="vuln_lookup" checked> CVE lookup</label>
+      <label title="Active, intrusive template scan of discovered web services. Needs the nuclei binary. Only for hosts you're authorized to test."><input type="checkbox" name="nuclei"> nuclei scan (active)</label>
+      <label title="Active: the Nikto web-server scanner against every resolved web service. Needs the nikto binary. Only for hosts you're authorized to test."><input type="checkbox" name="nikto"> nikto scan (active)</label>
+      <label title="Active: WPScan against every resolved web service (a fast no-op on non-WordPress sites). Needs the wpscan binary; set webscan.wpscan_api_token for CVE data."><input type="checkbox" name="wpscan"> wpscan (active)</label>
+      <label title="Check every discovered hostname for a dangling, claimable service (subdomain takeover). Needs the takeover binary."><input type="checkbox" name="takeover"> subdomain takeover</label>
+      <label title="Credential-free: Checkov + Trivy on the public GitHub repos and container images found for this domain. Needs the trivy/checkov binaries."><input type="checkbox" name="cloud_scan"> cloud artifact scan (trivy/checkov)</label>
+      <label title="Authenticated: Prowler + ScoutSuite against the configured cloud providers, using your environment credentials. Only for accounts you're authorized to audit. Needs the prowler/scout binaries."><input type="checkbox" name="cloud_audit"> cloud account audit (prowler/scoutsuite)</label>
+      <label><input type="checkbox" name="fresh"> fresh (ignore source TTLs)</label>
+      <label><input type="checkbox" name="authorize_scans"> authorize active Qualys scans</label>
+      <label><input type="checkbox" name="export_report"> export Obsidian markdown report</label>
+    </div>
+    <p class="note">Active stages connect directly to the target. Only scan infrastructure you are authorized to test. Re-scanning a known domain automatically revalidates it and prunes results that are no longer valid.</p>
+  </form>
+</div>
+<script>
+// Remember the source/stage checkboxes across scans (per browser). Boxes not
+// saved yet (e.g. a newly added source) keep their config default.
+// The active/intrusive toggles (authorize_scans, nuclei, nikto, ...) are never
+// remembered: each must be a deliberate per-scan choice.
+(function () {
+  const KEY = "posint.scanForm";
+  const NEVER_REMEMBER = ["authorize_scans", "nuclei", "nikto", "wpscan", "takeover", "cloud_scan", "cloud_audit", "export_report"];
+  const form = document.querySelector("form.scan");
+  const boxes = [...form.querySelectorAll('input[type=checkbox]')]
+    .filter(b => !NEVER_REMEMBER.includes(b.name));
+  const id = b => b.name + ":" + b.value;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) {}
+  boxes.forEach(b => { if (id(b) in saved) b.checked = saved[id(b)]; });
+  form.addEventListener("submit", () => {
+    const state = {};
+    boxes.forEach(b => { state[id(b)] = b.checked; });
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+  });
+})();
+</script>
+
+<h2>Domains</h2>
+{% if data.domains %}
+<p><a href="/export.zip" download>Download everything (zip)</a> <span class="note">- JSON, CSV, Obsidian vault and a copy of the database</span></p>
+<table class="dt">
+  <thead><tr><th>Domain</th><th>Hostnames</th><th>IPs</th><th>Services</th><th>Exposures</th><th>CVEs</th><th>Critical</th><th>Secrets</th><th>Added</th><th data-filter="none"></th><th data-filter="none"></th></tr></thead>
+  <tbody>
+  {% for d in data.domains %}
+  <tr>
+    <td><a href="/domains/{{ d.name }}">{{ d.name }}</a></td>
+    <td>{{ d.hostname_count }}</td>
+    <td>{{ d.ip_count }}</td>
+    <td>{{ d.service_count }}</td>
+    <td>{% if d.exposure_count %}<span class="sev sev-HIGH">{{ d.exposure_count }}</span>{% else %}0{% endif %}</td>
+    <td>{{ d.cve_count }}</td>
+    <td>{% if d.critical_count %}<span class="sev sev-CRITICAL">{{ d.critical_count }}</span>{% else %}0{% endif %}</td>
+    <td>{% if d.secret_count %}<span class="sev sev-CRITICAL">{{ d.secret_count }}</span>{% else %}0{% endif %}</td>
+    <td class="muted">{{ d.added_at[:10] }}</td>
+    <td><a href="/overview?domain={{ d.name|urlencode }}">overview</a></td>
+    <td>
+      <form class="inline delete" method="post" action="/domains/{{ d.name|urlencode }}/delete"
+            data-confirm="Delete {{ d.name }} and everything scanned for it? This can't be undone.">
+        <button type="submit" class="danger">Delete</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">No scans yet.</p>{% endif %}
+
+<script>
+document.querySelectorAll("form.delete").forEach(f => f.addEventListener("submit", e => {
+  if (!confirm(f.dataset.confirm)) e.preventDefault();
+}));
+</script>
+
+<h2>Recent scans</h2>
+{% if jobs %}
+<table>
+  <tr><th>Domain</th><th>Status</th><th>Stage</th><th>Started</th><th></th></tr>
+  {% for j in jobs %}
+  <tr>
+    <td>{{ j.domain }}</td>
+    <td class="st st-{{ j.status }}">{{ j.status }}</td>
+    <td class="muted">{% if j.status in ("running", "pending", "cancelling") %}{{ j.stage or "…" }}{% else %}-{% endif %}</td>
+    <td class="muted">{{ j.started_at or j.created_at }}</td>
+    <td><a href="/scans/{{ j.id }}">details</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">No scans this session.</p>{% endif %}
+{% endblock %}

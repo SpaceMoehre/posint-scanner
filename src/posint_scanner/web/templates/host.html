@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ h.name }} · posint-scanner{% endblock %}
+{% block body %}
+<h1>{{ h.name }}</h1>
+<p class="muted">First seen {{ h.first_seen }} · last seen {{ h.last_seen }}</p>
+
+{% if h.code_exposures %}
+<h2>GitHub exposures ({{ h.code_exposures|length }})</h2>
+{{ macros.exposures_table(h.code_exposures) }}
+{% endif %}
+
+{% if h.ips %}
+<h2>Resolves to</h2>
+<p>{% for ip in h.ips %}<a href="/ips/{{ ip }}">{{ ip }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+{% else %}<p class="muted">No resolved IP addresses.</p>{% endif %}
+
+<h2>Source results</h2>
+{% for r in h.results %}
+<h3 style="font-size:14px; margin:14px 0 4px"><code>{{ r.source }}</code> <span class="muted">{{ r.fetched_at }}</span></h3>
+<pre>{{ r.data | tojson(indent=2) }}</pre>
+{% else %}<p class="muted">No source results.</p>{% endfor %}
+{% endblock %}

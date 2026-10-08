@@ -1,0 +1,10 @@
+{
+    "ip": "71.6.199.23",
+    "noise": true,
+    "riot": false,
+    "classification": "benign",
+    "name": "Shodan.io",
+    "link": "https://viz.greynoise.io/ip/71.6.199.23",
+    "last_seen": "2026-09-26",
+    "message": "Success"
+}

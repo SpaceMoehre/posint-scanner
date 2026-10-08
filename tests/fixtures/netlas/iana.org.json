@@ -1,0 +1,40 @@
+{
+ "items": [
+  {
+   "data": {
+    "domain": "rdap-qa.iana.org"
+   },
+   "scan_label": "2026-08-11"
+  },
+  {
+   "data": {
+    "domain": "registry.int.iana.org"
+   },
+   "scan_label": "2026-08-11"
+  },
+  {
+   "data": {
+    "domain": "stage.iana.org"
+   },
+   "scan_label": "2026-08-11"
+  },
+  {
+   "data": {
+    "domain": "autodiscover.iana.org"
+   },
+   "scan_label": "2026-08-11"
+  },
+  {
+   "data": {
+    "domain": "pch-test.iana.org"
+   },
+   "scan_label": "2026-08-11"
+  },
+  {
+   "data": {
+    "domain": "whois.iana.org"
+   },
+   "scan_label": "2026-08-11"
+  }
+ ]
+}

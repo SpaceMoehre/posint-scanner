@@ -1,0 +1,6 @@
+{
+  "endpoint": "/v1/domain/example.com/subdomains",
+  "meta": {"limit_reached": false},
+  "subdomain_count": 3,
+  "subdomains": ["www", "api", "dev.internal"]
+}

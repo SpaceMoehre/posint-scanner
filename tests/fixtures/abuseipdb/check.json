@@ -1,0 +1,18 @@
+{
+  "data": {
+    "ipAddress": "203.0.113.10",
+    "isPublic": true,
+    "ipVersion": 4,
+    "isWhitelisted": false,
+    "abuseConfidenceScore": 37,
+    "countryCode": "DE",
+    "usageType": "Data Center/Web Hosting/Transit",
+    "isp": "Example Hosting GmbH",
+    "domain": "example-hosting.de",
+    "hostnames": ["mail.example.com", "static.10.113.0.203.clients.example-hosting.de"],
+    "isTor": false,
+    "totalReports": 12,
+    "numDistinctUsers": 5,
+    "lastReportedAt": "2026-09-20T08:15:32+00:00"
+  }
+}

@@ -1,0 +1,20 @@
+services:
+  posint-scanner:
+    build: .
+    image: posint-scanner
+    # Host-side bind is pinned to localhost: the UI can start active scans, so
+    # it isn't exposed on all interfaces by default. Change to "8000:8000" only
+    # on a network you control and trust.
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Persists the SQLite DB, the generated vault, and an optional config.yaml
+    # across container/image rebuilds. Drop config.yaml in ./data to use it;
+    # the scanner runs fine without one.
+    volumes:
+      - ./data:/data
+    # API keys (Shodan, Censys, Qualys, NVD) can be supplied as OSINT_* env
+    # vars instead of config.yaml - see config.py. Uncomment to load them from
+    # a local .env file (git-ignore it).
+    # env_file:
+    #   - .env
+    restart: unless-stopped

@@ -1,0 +1,30 @@
+{% macro exposures_table(exposures) %}
+<table class="dt">
+  <thead><tr>
+    <th data-filter="select">Kind</th>
+    <th>Target</th>
+    <th>Repo</th>
+    <th>File</th>
+    <th data-filter="select">Rule</th>
+    <th>Secret</th>
+    <th>Line</th>
+    <th>Last seen</th>
+  </tr></thead>
+  <tbody>
+  {% for e in exposures %}
+  <tr>
+    <td data-sort="{{ 0 if e.kind == 'secret' else 1 }}" data-values="{{ e.kind }}">
+      {% if e.kind == "secret" %}<span class="st st-failed">secret</span>{% else %}<span class="muted">reference</span>{% endif %}
+    </td>
+    <td>{{ e.target }}</td>
+    <td><a href="https://github.com/{{ e.repo }}" rel="noopener noreferrer">{{ e.repo }}</a></td>
+    <td><a href="{{ e.url }}" rel="noopener noreferrer" title="{{ e.path }}">{{ e.path }}</a></td>
+    <td data-values="{{ e.rule or '' }}">{{ e.rule or "-" }}</td>
+    <td>{% if e.secret %}<details><summary class="muted">reveal</summary><code>{{ e.secret }}</code></details>{% elif e.snippet %}<code class="muted">{{ e.snippet|truncate(80) }}</code>{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td class="muted">{{ e.line if e.line is not none else "-" }}</td>
+    <td class="muted">{{ e.last_seen[:10] if e.last_seen else "-" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}

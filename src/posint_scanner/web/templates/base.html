@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}posint-scanner{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #0f1419; --panel: #1a2029; --panel2: #232b36; --border: #2e3846;
+      --fg: #e6edf3; --muted: #8b98a5; --link: #58a6ff;
+      --crit: #f85149; --high: #ff9e64; --med: #e3b341; --low: #3fb950; --unknown: #6e7681;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    header {
+      background: var(--panel); border-bottom: 1px solid var(--border);
+      padding: 12px 20px; display: flex; gap: 20px; align-items: center; flex-wrap: wrap;
+    }
+    header a { color: var(--fg); text-decoration: none; font-weight: 600; }
+    header nav a { color: var(--muted); font-weight: 500; margin-right: 16px; }
+    header nav a:hover { color: var(--link); }
+    main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 17px; margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .muted { color: var(--muted); }
+    table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 14px; }
+    th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    tr:hover td { background: var(--panel); }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin: 12px 0; }
+    .stats { display: flex; gap: 12px; flex-wrap: wrap; }
+    .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-width: 130px; }
+    .stat .n { font-size: 26px; font-weight: 700; }
+    .stat .l { color: var(--muted); font-size: 13px; }
+    pre { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; }
+    code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+    .badge { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 12px; font-weight: 600; color: #0f1419; }
+    .b-CRITICAL { background: var(--crit); } .b-HIGH { background: var(--high); }
+    .b-MEDIUM { background: var(--med); } .b-LOW { background: var(--low); }
+    .b-UNKNOWN, .b-INFO { background: var(--unknown); color: var(--fg); }
+    form.scan label { display: inline-flex; align-items: center; gap: 5px; margin: 4px 14px 4px 0; font-size: 14px; }
+    form.scan .source-group { margin: 2px 0; }
+    form.scan .source-group > .muted { display: inline-block; min-width: 64px; font-size: 13px; }
+    input[type=text], input[type=search] { background: var(--panel2); border: 1px solid var(--border); color: var(--fg); padding: 8px 10px; border-radius: 6px; min-width: 260px; }
+    button { background: var(--link); color: #0f1419; border: 0; padding: 9px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+    button:hover { filter: brightness(1.1); }
+    button.danger { background: var(--crit); }
+    form.inline { margin: 0; }
+    form.inline button { padding: 4px 12px; font-size: 13px; }
+    .st { font-weight: 600; } .st-running { color: var(--med); } .st-completed { color: var(--low); }
+    .st-failed { color: var(--crit); } .st-pending { color: var(--muted); }
+    .st-cancelled { color: var(--crit); } .st-cancelling { color: var(--med); }
+    .note { color: var(--muted); font-size: 13px; }
+    /* table.dt: sortable/filterable (see script below) */
+    .dt-wrap { overflow-x: auto; }
+    .dt-bar { display: flex; gap: 10px; align-items: center; margin: 8px 0 0; font-size: 13px; }
+    .dt-bar input { min-width: 220px; padding: 5px 8px; }
+    table.dt th[data-col] { cursor: pointer; user-select: none; white-space: nowrap; }
+    table.dt th[data-col]:hover { color: var(--fg); }
+    table.dt th[aria-sort=ascending]::after { content: " ▲"; font-size: 10px; }
+    table.dt th[aria-sort=descending]::after { content: " ▼"; font-size: 10px; }
+    table.dt tr.dt-filters th { padding: 3px 6px; }
+    table.dt tr.dt-filters input, table.dt tr.dt-filters select {
+      width: 100%; min-width: 60px; background: var(--panel2); border: 1px solid var(--border);
+      color: var(--fg); padding: 3px 6px; border-radius: 4px; font-size: 12px; font-weight: 400;
+    }
+    tr:target td { background: var(--panel2); }
+    details { margin: 6px 0; } details summary { cursor: pointer; }
+    .sev { font-weight: 600; } .sev-CRITICAL { color: var(--crit); } .sev-HIGH { color: var(--high); }
+    .sev-MEDIUM { color: var(--med); } .sev-LOW { color: var(--low); }
+  </style>
+  <script>
+  // Any <table class="dt"> with a <thead> row of <th> and a <tbody> gets:
+  // click-to-sort headers, a per-column filter row and a whole-table search.
+  // A <td data-sort="..."> overrides the sort key; data-values="a|b" gives a
+  // multi-valued cell (e.g. several domains) for dropdown filters. A <th
+  // data-filter="select"> gets a dropdown of distinct values instead of a
+  // text box; data-filter="none" gets no filter. Text filters are
+  // space-separated terms that must all match: case-insensitive substrings,
+  // "-x" / "!x" excludes, "quoted phrases" keep spaces, and ">7" / "<=80"
+  // compare numerically.
+  document.addEventListener("DOMContentLoaded", () => {
+    const cmp = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"}).compare;
+    const key = td => td ? (td.dataset.sort ?? td.textContent.trim()) : "";
+    const values = td => td ? (td.dataset.values !== undefined
+      ? td.dataset.values.split("|").filter(Boolean) : [td.textContent.trim()]) : [];
+    const isNum = s => /^-?\d+(\.\d+)?$/.test(s);
+    const isBlank = s => s === "" || s === "-";
+
+    // `text` is what substring filters see; `num` (the sort key) is what
+    // numeric comparisons see, so e.g. a severity badge compares by rank.
+    function matches(text, f, num = text) {
+      const terms = f.replace(/(>=|<=|>|<|=)\s+/g, "$1").match(/[-!]?"[^"]*"?|\S+/g) || [];
+      return terms.every(t => matchTerm(text, t, num));
+    }
+
+    function matchTerm(text, f, num) {
+      const neg = f.length > 1 && (f[0] === "!" || f[0] === "-");
+      if (neg) f = f.slice(1);
+      f = f.replace(/^"|"$/g, "");
+      if (!f) return true;
+      const op = f.match(/^(>=|<=|>|<|=)\s*(-?\d+(\.\d+)?)$/);
+      let ok;
+      if (op) {
+        const n = parseFloat(num), v = parseFloat(op[2]);
+        ok = !isNaN(n) && ({">": n > v, "<": n < v, ">=": n >= v, "<=": n <= v, "=": n === v})[op[1]];
+      } else ok = text.toLowerCase().includes(f.toLowerCase());
+      return neg ? !ok : ok;
+    }
+
+    document.querySelectorAll("table.dt").forEach(table => {
+      const head = table.tHead.rows[0], body = table.tBodies[0];
+      const rows = Array.from(body.rows), ths = Array.from(head.cells);
+      const filters = new Array(ths.length).fill("");
+
+      const wrap = document.createElement("div");
+      wrap.className = "dt-wrap";
+      table.before(wrap);
+      wrap.append(table);
+      const bar = document.createElement("div");
+      bar.className = "dt-bar";
+      bar.innerHTML = '<input type="search" placeholder="Search… (-word excludes)"><span class="muted"></span>';
+      wrap.before(bar);
+      const search = bar.querySelector("input"), count = bar.querySelector("span");
+
+      function apply() {
+        const q = search.value.trim();
+        let shown = 0;
+        rows.forEach(tr => {
+          const ok = (!q || matches(tr.textContent, q)) && filters.every((f, i) => {
+            if (!f) return true;
+            const td = tr.cells[i];
+            return ths[i].dataset.filter === "select" ? values(td).includes(f) : matches(td ? td.textContent : "", f, key(td));
+          });
+          tr.hidden = !ok;
+          shown += ok;
+        });
+        count.textContent = shown === rows.length ? `${rows.length} row${rows.length === 1 ? "" : "s"}` : `${shown} of ${rows.length} rows`;
+      }
+
+      const frow = table.tHead.insertRow();
+      frow.className = "dt-filters";
+      ths.forEach((th, i) => {
+        const cell = document.createElement("th");
+        frow.append(cell);
+        const mode = th.dataset.filter;
+        if (mode === "none") return;
+        let input;
+        if (mode === "select") {
+          input = document.createElement("select");
+          const opts = [...new Set(rows.flatMap(tr => values(tr.cells[i])))].sort(cmp);
+          input.innerHTML = '<option value="">all</option>';
+          opts.forEach(o => input.add(new Option(o, o)));
+        } else {
+          input = document.createElement("input");
+          input.type = "search";
+          input.placeholder = "filter";
+        }
+        input.addEventListener("input", () => { filters[i] = input.value.trim(); apply(); });
+        cell.append(input);
+      });
+
+      ths.forEach((th, i) => {
+        th.dataset.col = i;
+        th.addEventListener("click", () => {
+          const desc = th.getAttribute("aria-sort") === "ascending";
+          ths.forEach(h => h.removeAttribute("aria-sort"));
+          th.setAttribute("aria-sort", desc ? "descending" : "ascending");
+          const sorted = rows.slice().sort((a, b) => {
+            const x = key(a.cells[i]), y = key(b.cells[i]);
+            if (isBlank(x) !== isBlank(y)) return isBlank(x) ? 1 : -1;  // blanks last
+            const r = isNum(x) && isNum(y) ? parseFloat(x) - parseFloat(y) : cmp(x, y);
+            return desc ? -r : r;
+          });
+          body.append(...sorted);
+        });
+      });
+      search.addEventListener("input", apply);
+      apply();
+    });
+  });
+  </script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header>
+    <a href="/">🛰 posint-scanner</a>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/overview">Security Overview</a>
+      <a href="/settings">Settings</a>
+    </nav>
+  </header>
+  <main>{% block body %}{% endblock %}</main>
+</body>
+</html>

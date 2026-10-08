@@ -1,0 +1,8 @@
+{
+  "meta": {"count": 3, "cursor": "CURSOR-PAGE-2"},
+  "data": [
+    {"attributes": {"last_dns_records": [{"type": "A", "value": "93.184.215.14", "ttl": 3600}], "tld": "com"}, "type": "domain", "id": "www.example.com", "links": {"self": "https://www.virustotal.com/api/v3/domains/www.example.com"}},
+    {"attributes": {"last_dns_records": [], "tld": "com"}, "type": "domain", "id": "mail.example.com", "links": {"self": "https://www.virustotal.com/api/v3/domains/mail.example.com"}}
+  ],
+  "links": {"self": "https://www.virustotal.com/api/v3/domains/example.com/subdomains?limit=40", "next": "https://www.virustotal.com/api/v3/domains/example.com/subdomains?cursor=CURSOR-PAGE-2&limit=40"}
+}
