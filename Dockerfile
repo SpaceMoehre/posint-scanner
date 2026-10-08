@@ -94,10 +94,11 @@ RUN if [ "$INSTALL_CLOUDSCAN" = "true" ]; then set -eux; \
         arm64) TRIVY_ARCH=ARM64 ;; \
         *)     TRIVY_ARCH=64bit ;; \
       esac; \
-      curl -fsSL -o /tmp/trivy.tar.gz \
-        "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz"; \
-      tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy; \
-      rm -f /tmp/trivy.tar.gz; \
+      curl -fsSL -o /tmp/trivy.deb \
+        "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.deb"; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends /tmp/trivy.deb; \
+      rm -rf /tmp/trivy.deb /var/lib/apt/lists/*; \
       pip install checkov prowler scoutsuite; \
     fi
 
