@@ -25,11 +25,15 @@ jobs:
       packages: write
       id-token: write
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
+      image-ref: ${{ env.REGISTRY }}/${{ steps.lower.outputs.name }}@${{ steps.build.outputs.digest }}
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Lowercase image name
+        id: lower
+        run: echo "name=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -80,19 +84,29 @@ jobs:
   test:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Pull image
         run: |
-          docker pull ${{ needs.build.outputs.image-tag }}
+          docker pull ${{ needs.build.outputs.image-ref }}
 
       - name: Test CLI help
         run: |
-          docker run --rm ${{ needs.build.outputs.image-tag }} posint-scanner --help
+          docker run --rm ${{ needs.build.outputs.image-ref }} posint-scanner --help
 
       - name: Test scan dry-run
         run: |
           docker run --rm -v /tmp/test-db:/data \
-            ${{ needs.build.outputs.image-tag }} \
+            ${{ needs.build.outputs.image-ref }} \
             posint-scanner db init --db /data/test.db
 
       - name: Test web server starts
@@ -100,7 +114,7 @@ jobs:
           docker run -d --name test-web \
             -v /tmp/test-web:/data \
             -p 127.0.0.1:8000:8000 \
-            ${{ needs.build.outputs.image-tag }}
+            ${{ needs.build.outputs.image-ref }}
           sleep 5
           curl -sf http://127.0.0.1:8000/ >/dev/null && echo "Web UI responding"
           docker stop test-web
@@ -114,42 +128,33 @@ jobs:
       contents: write
     steps:
       - name: Download artifact metadata
-        run: echo "Build completed for tag: ${{ needs.build.outputs.image-tag }}"
+        run: |
+          echo "Build completed: ${{ needs.build.outputs.image-ref }}"
 
       - name: Prepare release body
         run: |
-          python3 -c "
-import os
-repo = os.getenv('GITHUB_REPOSITORY')
-ref = os.getenv('GITHUB_REF_NAME')
-body = f'''## Docker Image
-
-\`\`\`bash
-docker pull ghcr.io/{repo}:{ref}
-\`\`\`
-
-### Run the scanner
-\`\`\`bash
-# Web UI
-docker run -d -p 8000:8000 \\
-  -v \$(pwd)/data:/data \\
-  ghcr.io/{repo}:{ref}
-
-# CLI scan
-docker run --rm -v \$(pwd)/data:/data \\
-  ghcr.io/{repo}:{ref} \\
-  posint-scanner scan example.com --db /data/posint.db
-\`\`\`
-
-### Build arguments
-- INSTALL_NUCLEI=true
-- INSTALL_CLOUDSCAN=true
-- INSTALL_WEBSCAN=true
-- INSTALL_THEHARVESTER=true
-'''
-with open('release-body.md', 'w') as f:
-    f.write(body)
-"
+          {
+            echo '## Docker Image'
+            echo
+            echo '```bash'
+            echo "docker pull ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME}"
+            echo '```'
+            echo
+            echo '### Run the scanner'
+            echo '```bash'
+            echo '# Web UI'
+            echo "docker run -d -p 8000:8000 -v \$(pwd)/data:/data ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME}"
+            echo
+            echo '# CLI scan'
+            echo "docker run --rm -v \$(pwd)/data:/data ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME} posint-scanner scan example.com --db /data/posint.db"
+            echo '```'
+            echo
+            echo '### Build arguments'
+            echo '- INSTALL_NUCLEI=true'
+            echo '- INSTALL_CLOUDSCAN=true'
+            echo '- INSTALL_WEBSCAN=true'
+            echo '- INSTALL_THEHARVESTER=true'
+          } > release-body.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
