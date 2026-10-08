@@ -114,8 +114,7 @@ jobs:
       contents: write
     steps:
       - name: Download artifact metadata
-        run: echo "Build completed for tag: ${{
-          needs.build.outputs.image-tag }}"
+        run: echo "Build completed for tag: ${{ needs.build.outputs.image-tag }}"
 
       - name: Prepare release body
         env:
