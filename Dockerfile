@@ -87,7 +87,7 @@ RUN pip install ".[web]"
 #   scoutsuite (`scout`) - multi-cloud auditing (pip)
 # Set INSTALL_CLOUDSCAN=false for a slimmer image without them.
 ARG INSTALL_CLOUDSCAN=true
-ARG TRIVY_VERSION=0.58.1
+ARG TRIVY_VERSION=0.75.0
 RUN if [ "$INSTALL_CLOUDSCAN" = "true" ]; then set -eux; \
       case "$TARGETARCH" in \
         amd64) TRIVY_ARCH=64bit ;; \
