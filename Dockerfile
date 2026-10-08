@@ -104,7 +104,7 @@ RUN if [ "$INSTALL_CLOUDSCAN" = "true" ]; then set -eux; \
 
 # Web-app / subdomain-takeover scanners for the opt-in --nikto / --wpscan /
 # --takeover stages (all skipped gracefully at runtime when absent):
-#   nikto    - Perl web-server scanner (Debian package)
+#   nikto    - Perl web-server scanner (git clone; the Debian package is non-free)
 #   wpscan   - Ruby WordPress scanner (gem; needs a Ruby toolchain to build)
 #   takeover - Python subdomain-takeover checker (pip, from GitHub)
 # Set INSTALL_WEBSCAN=false for a slimmer image without them.
@@ -112,7 +112,10 @@ ARG INSTALL_WEBSCAN=true
 RUN if [ "$INSTALL_WEBSCAN" = "true" ]; then set -eux; \
       apt-get update; \
       apt-get install -y --no-install-recommends \
-        nikto ruby ruby-dev build-essential libcurl4-openssl-dev; \
+        perl libnet-ssleay-perl ruby ruby-dev build-essential libcurl4-openssl-dev; \
+      git clone --depth 1 https://github.com/sullo/nikto.git /opt/nikto; \
+      printf '#!/bin/sh\nexec perl /opt/nikto/program/nikto.pl "$@"\n' > /usr/local/bin/nikto; \
+      chmod +x /usr/local/bin/nikto; \
       gem install --no-document wpscan; \
       pip install "git+https://github.com/edoardottt/takeover.git"; \
       apt-get purge -y ruby-dev build-essential; \
