@@ -116,32 +116,37 @@ jobs:
       - name: Download artifact metadata
         run: echo "Build completed for tag: ${{ needs.build.outputs.image-tag }}"
 
+      - name: Prepare release body
+        run: |
+          cat > release-body.md <<'EOF'
+          ## Docker Image
+
+          ```bash
+          docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          ```
+
+          ### Run the scanner
+          ```bash
+          # Web UI
+          docker run -d -p 8000:8000 \
+            -v $(pwd)/data:/data \
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+
+          # CLI scan
+          docker run --rm -v $(pwd)/data:/data \
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
+            posint-scanner scan example.com --db /data/posint.db
+          ```
+
+          ### Build arguments
+          - INSTALL_NUCLEI=true
+          - INSTALL_CLOUDSCAN=true
+          - INSTALL_WEBSCAN=true
+          - INSTALL_THEHARVESTER=true
+          EOF
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          body: |
-            ## Docker Image
-
-            ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ```
-
-            ### Run the scanner
-            ```bash
-            # Web UI
-            docker run -d -p 8000:8000 \
-              -v $(pwd)/data:/data \
-              ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-
-            # CLI scan
-            docker run --rm -v $(pwd)/data:/data \
-              ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
-              posint-scanner scan example.com --db /data/posint.db
-            ```
-
-            ### Build arguments
-            - INSTALL_NUCLEI=true
-            - INSTALL_CLOUDSCAN=true
-            - INSTALL_WEBSCAN=true
-            - INSTALL_THEHARVESTER=true
+          body_path: release-body.md
