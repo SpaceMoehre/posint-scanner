@@ -118,32 +118,38 @@ jobs:
 
       - name: Prepare release body
         run: |
-          cat > release-body.md <<'ENDOFBODY'
-          ## Docker Image
+          python3 -c "
+import os
+repo = os.getenv('GITHUB_REPOSITORY')
+ref = os.getenv('GITHUB_REF_NAME')
+body = f'''## Docker Image
 
-          ```bash
-          docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-          ```
+\`\`\`bash
+docker pull ghcr.io/{repo}:{ref}
+\`\`\`
 
-          ### Run the scanner
-          ```bash
-          # Web UI
-          docker run -d -p 8000:8000 \
-            -v $(pwd)/data:/data \
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+### Run the scanner
+\`\`\`bash
+# Web UI
+docker run -d -p 8000:8000 \\
+  -v \$(pwd)/data:/data \\
+  ghcr.io/{repo}:{ref}
 
-          # CLI scan
-          docker run --rm -v $(pwd)/data:/data \
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
-            posint-scanner scan example.com --db /data/posint.db
-          ```
+# CLI scan
+docker run --rm -v \$(pwd)/data:/data \\
+  ghcr.io/{repo}:{ref} \\
+  posint-scanner scan example.com --db /data/posint.db
+\`\`\`
 
-          ### Build arguments
-          - INSTALL_NUCLEI=true
-          - INSTALL_CLOUDSCAN=true
-          - INSTALL_WEBSCAN=true
-          - INSTALL_THEHARVESTER=true
-          ENDOFBODY
+### Build arguments
+- INSTALL_NUCLEI=true
+- INSTALL_CLOUDSCAN=true
+- INSTALL_WEBSCAN=true
+- INSTALL_THEHARVESTER=true
+'''
+with open('release-body.md', 'w') as f:
+    f.write(body)
+"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
