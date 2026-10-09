@@ -827,6 +827,18 @@ def _webtech_cpe_checks(db: Database, ip_id: int) -> list[tuple[int, str, str | 
     return checks
 
 
+def _purge_versionless_nvd(db: Database, ip_id: int) -> None:
+    """Drop CVE rows stored for a CPE without a concrete version (e.g. by an
+    older scan): they list every CVE ever filed for the product."""
+    for row in db.list_results_for_target("ip", ip_id):
+        if row["source"] != "nvd":
+            continue
+        cpe = json.loads(row["data"]).get("cpe")
+        cpes = cpe if isinstance(cpe, list) else [cpe]
+        if cpes and all(not c or cpe_version(c) is None for c in cpes):
+            db.delete_result(row["id"])
+
+
 def _run_vulnerability_lookup(
     db: Database,
     domain_id: int,
@@ -903,6 +915,7 @@ def _run_vulnerability_lookup(
                 continue
             seen_ip_ids.add(ip_row["id"])
 
+            _purge_versionless_nvd(db, ip_row["id"])
             webtech_checks = _webtech_cpe_checks(db, ip_row["id"])
             fingerprinted = {
                 (port, technology.lower(), version)

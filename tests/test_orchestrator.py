@@ -766,6 +766,22 @@ class TestVulnerabilityLookupIntegration:
             r["source"] == "nvd" for r in db.list_results_for_target("ip", ip_row["id"])
         )
 
+    def test_stale_versionless_nvd_rows_are_purged(self, db, no_live_nvd_lookup):
+        with patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]):
+            run_scan(db, ["example.com"], [FakeDiscoverySource()], netblock_sweep=False)
+        ip_id = db.get_ip_by_address("1.2.3.4")["id"]
+        stale = {"port": 80, "cpe": "cpe:2.3:a:drupal:drupal:*:*:*:*:*:*:*:*",
+                 "cves": [{"cve_id": "CVE-2009-9999"}]}
+        kept = {"port": 22, "cpe": "cpe:2.3:a:openssh:openssh:9.0:*:*:*:*:*:*:*",
+                "cves": [{"cve_id": "CVE-2023-0001"}]}
+        db.insert_result("nvd", "ip", ip_id, stale)
+        db.insert_result("nvd", "ip", ip_id, kept)
+        with patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]):
+            run_scan(db, ["example.com"], [FakeDiscoverySource()], netblock_sweep=False)
+        cpes = [json.loads(r["data"])["cpe"] for r in db.list_results_for_target("ip", ip_id)
+                if r["source"] == "nvd"]
+        assert cpes == [kept["cpe"]]
+
     def test_falls_back_to_guessed_cpe_when_none_provided(self, db, no_live_nvd_lookup):
         no_live_nvd_lookup.return_value = [{"cve_id": "CVE-2021-23017", "cvss_score": 7.7}]
         with patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]):

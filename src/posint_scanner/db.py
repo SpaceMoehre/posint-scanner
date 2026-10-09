@@ -471,6 +471,11 @@ class Database:
             (target_type, target_id),
         ).fetchall()
 
+    @_locked
+    def delete_result(self, result_id: int) -> None:
+        self.conn.execute("DELETE FROM results WHERE id = ?", (result_id,))
+        self.conn.commit()
+
     # -- continuation / revalidation --------------------------------------
     # Used by a resumed scan to prune data that's no longer valid, driven by
     # last_seen: every still-valid hostname->IP mapping gets its last_seen
