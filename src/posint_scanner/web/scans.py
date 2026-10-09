@@ -23,7 +23,6 @@ from pathlib import Path
 
 from posint_scanner.config import load_config
 from posint_scanner.db import Database
-from posint_scanner.export.obsidian_export import export_obsidian
 from posint_scanner.orchestrator import ScanControl, run_scan
 from posint_scanner.registry import SOURCE_CLASSES, SourceSelection, build_sources
 
@@ -54,7 +53,6 @@ class ScanOptions:
     cloud_scan: bool = False
     cloud_audit: bool = False
     fresh: bool = False
-    export_report: bool = False  # opt-in Obsidian markdown export (off by default)
 
     def selection(self) -> SourceSelection:
         if self.sources is None:
@@ -182,9 +180,6 @@ class ScanManager:
                     fresh=opts.fresh,
                     control=job.control,
                 )
-                # Export Obsidian markdown only if explicitly requested (off by default).
-                if opts.export_report:
-                    export_obsidian(db, Path(self.vault_dir))
             job.status = "cancelled" if job.control.cancelled() else "completed"
         except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
             logger.exception("scan job %s for %s failed", job.id, job.domain)

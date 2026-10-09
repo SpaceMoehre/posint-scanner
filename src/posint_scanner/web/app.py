@@ -18,7 +18,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -85,7 +85,6 @@ def create_app(
         cloud_scan: bool = Form(False),
         cloud_audit: bool = Form(False),
         fresh: bool = Form(False),
-        export_report: bool = Form(False),
     ) -> RedirectResponse:
         domain = domain.strip()
         if not domain:
@@ -105,7 +104,6 @@ def create_app(
             cloud_scan=cloud_scan,
             cloud_audit=cloud_audit,
             fresh=fresh,
-            export_report=export_report,
         )
         job = manager.start(domain, options)
         return RedirectResponse(f"/scans/{job.id}", status_code=303)
@@ -131,11 +129,13 @@ def create_app(
         return JSONResponse(job.as_dict())
 
     @app.get("/export.zip")
-    def export_zip() -> FileResponse:
+    def export_zip(domain: list[str] = Query([])) -> FileResponse:
+        """`domain` (repeatable) limits the export to those domains; none
+        means everything."""
         fd, path = tempfile.mkstemp(suffix=".zip")
         os.close(fd)
         try:
-            write_zip(db, path)
+            write_zip(db, path, domains=domain or None)
         except Exception:
             os.unlink(path)
             raise

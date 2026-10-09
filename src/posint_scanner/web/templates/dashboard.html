@@ -14,6 +14,7 @@
     <div style="margin-bottom:12px">
       <input type="text" name="domain" placeholder="example.com" required autofocus>
       <button type="submit">Scan</button>
+      <button type="button" id="select-all-opts" class="secondary">Select all options</button>
     </div>
     <input type="hidden" name="sources_form" value="1">
     {% for category in ["passive", "scrape", "active"] %}
@@ -37,7 +38,6 @@
       <label title="Authenticated: Prowler + ScoutSuite against the configured cloud providers, using your environment credentials. Only for accounts you're authorized to audit. Needs the prowler/scout binaries."><input type="checkbox" name="cloud_audit"> cloud account audit (prowler/scoutsuite)</label>
       <label><input type="checkbox" name="fresh"> fresh (ignore source TTLs)</label>
       <label><input type="checkbox" name="authorize_scans"> authorize active Qualys scans</label>
-      <label><input type="checkbox" name="export_report"> export Obsidian markdown report</label>
     </div>
     <p class="note">Active stages connect directly to the target. Only scan infrastructure you are authorized to test. Re-scanning a known domain automatically revalidates it and prunes results that are no longer valid.</p>
   </form>
@@ -49,7 +49,7 @@
 // remembered: each must be a deliberate per-scan choice.
 (function () {
   const KEY = "posint.scanForm";
-  const NEVER_REMEMBER = ["authorize_scans", "nuclei", "nikto", "wpscan", "takeover", "cloud_scan", "cloud_audit", "export_report"];
+  const NEVER_REMEMBER = ["authorize_scans", "nuclei", "nikto", "wpscan", "takeover", "cloud_scan", "cloud_audit"];
   const form = document.querySelector("form.scan");
   const boxes = [...form.querySelectorAll('input[type=checkbox]')]
     .filter(b => !NEVER_REMEMBER.includes(b.name));
@@ -65,14 +65,30 @@
 })();
 </script>
 
+<script>
+(function () {
+  const btn = document.getElementById("select-all-opts");
+  const boxes = () => [...document.querySelectorAll('form.scan input[type=checkbox]')];
+  btn.addEventListener("click", () => {
+    const all = boxes().every(b => b.checked);
+    boxes().forEach(b => { b.checked = !all; });
+    btn.textContent = all ? "Select all options" : "Clear all options";
+  });
+})();
+</script>
+
 <h2>Domains</h2>
 {% if data.domains %}
-<p><a href="/export.zip" download>Download everything (zip)</a> <span class="note">- JSON, CSV, Obsidian vault and a copy of the database</span></p>
+<form id="export" method="get" action="/export.zip">
+  <button type="submit">Export selected (zip)</button>
+  <span class="note">- JSON, CSV, Obsidian markdown vault and a copy of the database; nothing selected = everything</span>
+</form>
 <table class="dt">
-  <thead><tr><th>Domain</th><th>Hostnames</th><th>IPs</th><th>Services</th><th>Exposures</th><th>CVEs</th><th>Critical</th><th>Secrets</th><th>Added</th><th data-filter="none"></th><th data-filter="none"></th></tr></thead>
+  <thead><tr><th data-filter="none"><input type="checkbox" id="export-all" title="select all"></th><th>Domain</th><th>Hostnames</th><th>IPs</th><th>Services</th><th>Exposures</th><th>CVEs</th><th>Critical</th><th>Secrets</th><th>Added</th><th data-filter="none"></th><th data-filter="none"></th></tr></thead>
   <tbody>
   {% for d in data.domains %}
   <tr>
+    <td><input type="checkbox" form="export" name="domain" value="{{ d.name }}" class="export-sel"></td>
     <td><a href="/domains/{{ d.name }}">{{ d.name }}</a></td>
     <td>{{ d.hostname_count }}</td>
     <td>{{ d.ip_count }}</td>
@@ -96,6 +112,11 @@
 {% else %}<p class="muted">No scans yet.</p>{% endif %}
 
 <script>
+(function () {
+  const all = document.getElementById("export-all");
+  if (all) all.addEventListener("change", () =>
+    document.querySelectorAll(".export-sel").forEach(b => { b.checked = all.checked; }));
+})();
 document.querySelectorAll("form.delete").forEach(f => f.addEventListener("submit", e => {
   if (!confirm(f.dataset.confirm)) e.preventDefault();
 }));

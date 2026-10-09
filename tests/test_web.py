@@ -284,7 +284,6 @@ class TestScanLaunch:
         client = TestClient(app)
         with (
             patch("posint_scanner.web.scans.run_scan") as mock_run,
-            patch("posint_scanner.web.scans.export_obsidian") as mock_export,
         ):
             r = client.post("/scans", data={"domain": "example.com"},
                             follow_redirects=False)
@@ -292,8 +291,6 @@ class TestScanLaunch:
             job_id = r.headers["location"].rsplit("/", 1)[1]
             assert self._wait(client, job_id) == "completed"
         mock_run.assert_called_once()
-        # export_obsidian is now opt-in (export_report checkbox), not called by default
-        mock_export.assert_not_called()
         assert mock_run.call_args.kwargs["tech_fingerprint"] is False  # unchecked box omitted
 
     def test_scan_options_reflect_checkboxes(self, tmp_path):
@@ -303,7 +300,6 @@ class TestScanLaunch:
         client = TestClient(app)
         with (
             patch("posint_scanner.web.scans.run_scan") as mock_run,
-            patch("posint_scanner.web.scans.export_obsidian"),
         ):
             r = client.post(
                 "/scans",
@@ -325,7 +321,6 @@ class TestScanLaunch:
         client = TestClient(app)
         with (
             patch("posint_scanner.web.scans.run_scan") as mock_run,
-            patch("posint_scanner.web.scans.export_obsidian"),
         ):
             r = client.post("/scans", data={"domain": "example.com", **data},
                             follow_redirects=False)
@@ -384,7 +379,6 @@ class TestScanLaunch:
         client = TestClient(app)
         with (
             patch("posint_scanner.web.scans.run_scan", side_effect=RuntimeError("boom")),
-            patch("posint_scanner.web.scans.export_obsidian"),
         ):
             r = client.post("/scans", data={"domain": "example.com"}, follow_redirects=False)
             job_id = r.headers["location"].rsplit("/", 1)[1]
@@ -417,7 +411,6 @@ class TestScanProgressAndCancel:
 
         with (
             patch("posint_scanner.web.scans.run_scan", side_effect=fake_run),
-            patch("posint_scanner.web.scans.export_obsidian"),
         ):
             r = client.post("/scans", data={"domain": "example.com"}, follow_redirects=False)
             job_id = r.headers["location"].rsplit("/", 1)[1]
@@ -436,7 +429,6 @@ class TestScanProgressAndCancel:
 
         with (
             patch("posint_scanner.web.scans.run_scan", side_effect=fake_run),
-            patch("posint_scanner.web.scans.export_obsidian"),
         ):
             r = client.post("/scans", data={"domain": "example.com"}, follow_redirects=False)
             job_id = r.headers["location"].rsplit("/", 1)[1]
@@ -506,6 +498,21 @@ class TestDeleteAndExport:
         names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
         assert {"results.json", "services.csv", "posint.db"} <= set(names)
         assert any(n.startswith("vault/Domains/") for n in names)
+
+    def test_export_zip_selected_domains_only(self, client):
+        import io
+        import json
+        import zipfile
+
+        every = [d["name"] for d in json.loads(zipfile.ZipFile(
+            io.BytesIO(client.get("/export.zip").content)).read("results.json"))["domains"]]
+        assert every
+        r = client.get("/export.zip", params={"domain": every[0]})
+        z = zipfile.ZipFile(io.BytesIO(r.content))
+        got = [d["name"] for d in json.loads(z.read("results.json"))["domains"]]
+        assert got == [every[0]]
+        assert [n for n in z.namelist() if n.startswith("vault/Domains/")] == [
+            f"vault/Domains/{every[0]}.md"]
 
 
 class TestWebLinks:
