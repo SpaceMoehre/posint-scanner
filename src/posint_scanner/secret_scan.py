@@ -16,10 +16,9 @@ import logging
 import math
 import re
 import shutil
-import subprocess
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+
+from posint_scanner import toolrun
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +119,7 @@ def _builtin(text: str) -> list[SecretMatch]:
 _gitleaks_missing_warned = False
 
 
-def _gitleaks(text: str) -> list[SecretMatch]:
+def _gitleaks(text: str, report: toolrun.ReportSink | None = None) -> list[SecretMatch]:
     global _gitleaks_missing_warned
     binary = shutil.which("gitleaks")
     if binary is None:
@@ -128,34 +127,38 @@ def _gitleaks(text: str) -> list[SecretMatch]:
             _gitleaks_missing_warned = True
             logger.warning("gitleaks not on PATH - secret scanning uses the built-in rules only")
         return []
-    with tempfile.TemporaryDirectory(prefix="posint-gitleaks-") as tmp:
-        source = Path(tmp) / "content"
-        report = Path(tmp) / "report.json"
+    with toolrun.workspace("gitleaks") as workspace:
+        source = workspace / "content"
+        out = workspace / "report.json"
         try:
             # errors="surrogatepass" so text carrying lone surrogates (or a
             # non-UTF-8 locale) can't raise UnicodeEncodeError and abort the
             # whole scan; the write is inside the try either way.
             source.write_text(text, encoding="utf-8", errors="surrogatepass")
-            subprocess.run(
+            proc = toolrun.run_tool(
                 [binary, "detect", "--no-git", "--no-banner", "--source", str(source),
-                 "--report-format", "json", "--report-path", str(report), "--exit-code", "0"],
-                capture_output=True, timeout=GITLEAKS_TIMEOUT_SECONDS, check=True,
+                 "--report-format", "json", "--report-path", str(out), "--exit-code", "0"],
+                timeout=GITLEAKS_TIMEOUT_SECONDS, cwd=workspace,
             )
-            findings = json.loads(report.read_text() or "[]")
-        except (subprocess.SubprocessError, OSError, ValueError) as exc:
+            if proc is None or proc.returncode != 0:
+                raise OSError(proc.stderr.strip()[:200] if proc else "did not finish")
+            findings = json.loads(out.read_text() or "[]")
+        except (OSError, ValueError) as exc:
             logger.warning("gitleaks failed: %s", exc)
             return []
-    return [
-        SecretMatch(f"gitleaks:{f.get('RuleID', 'unknown')}", f["Secret"], int(f.get("StartLine") or 0))
-        for f in findings
-        if f.get("Secret")
-    ]
+        matches = [
+            SecretMatch(f"gitleaks:{f.get('RuleID', 'unknown')}", f["Secret"], int(f.get("StartLine") or 0))
+            for f in findings
+            if f.get("Secret")
+        ]
+        toolrun.emit(report, "gitleaks", matches, path=out)
+    return matches
 
 
 _trufflehog_missing_warned = False
 
 
-def _trufflehog(text: str) -> list[SecretMatch]:
+def _trufflehog(text: str, report: toolrun.ReportSink | None = None) -> list[SecretMatch]:
     global _trufflehog_missing_warned
     binary = shutil.which("trufflehog")
     if binary is None:
@@ -163,20 +166,23 @@ def _trufflehog(text: str) -> list[SecretMatch]:
             _trufflehog_missing_warned = True
             logger.warning("trufflehog not on PATH - skipping it")
         return []
-    with tempfile.TemporaryDirectory(prefix="posint-trufflehog-") as tmp:
-        source = Path(tmp) / "content"
+    with toolrun.workspace("trufflehog") as workspace:
+        source = workspace / "content"
         try:
             # write inside the try (with surrogatepass) so odd encodings can't
             # crash the scan; --no-verification is mandatory - this tool
             # reports leaked secrets, it never authenticates with them.
             source.write_text(text, encoding="utf-8", errors="surrogatepass")
-            proc = subprocess.run(
-                [binary, "filesystem", str(source), "--json", "--no-verification"],
-                capture_output=True, text=True, timeout=TRUFFLEHOG_TIMEOUT_SECONDS,
-            )
-        except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             logger.warning("trufflehog failed: %s", exc)
             return []
+        proc = toolrun.run_tool(
+            [binary, "filesystem", str(source), "--json", "--no-verification"],
+            timeout=TRUFFLEHOG_TIMEOUT_SECONDS, cwd=workspace,
+        )
+    if proc is None:
+        logger.warning("trufflehog failed: did not finish")
+        return []
     found = []
     for raw_line in proc.stdout.splitlines():
         raw_line = raw_line.strip()
@@ -197,18 +203,23 @@ def _trufflehog(text: str) -> list[SecretMatch]:
             secret,
             int(fs.get("line") or 0),
         ))
+    toolrun.emit(report, "trufflehog", found, text=proc.stdout)
     return found
 
 
 def find_secrets(
-    text: str, use_gitleaks: bool = True, use_trufflehog: bool = False
+    text: str,
+    use_gitleaks: bool = True,
+    use_trufflehog: bool = False,
+    report: toolrun.ReportSink | None = None,
 ) -> list[SecretMatch]:
     """Secrets in `text`: every built-in finding, then any gitleaks and (when
     enabled) trufflehog finding whose value an earlier engine didn't already
     report. Deduping by value (not value+line) is deliberate - the engines
     number lines differently, so keying on the line would let the same secret
     through more than once. trufflehog is off by default (extra dependency,
-    slower); enable it in the GitHub source's config."""
+    slower); enable it in the GitHub source's config. `report` receives each
+    external engine's raw report, keyed by the engine's name."""
     unique = _builtin(text)
     # Dedup on the stripped value: the engines capture the same credential
     # with differing surrounding whitespace/delimiters, so an exact-string
@@ -217,9 +228,9 @@ def find_secrets(
 
     external = []
     if use_gitleaks:
-        external += _gitleaks(text)
+        external += _gitleaks(text, report)
     if use_trufflehog:
-        external += _trufflehog(text)
+        external += _trufflehog(text, report)
     for match in external:
         key = match.value.strip()
         if key in seen_values:

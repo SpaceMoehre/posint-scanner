@@ -43,12 +43,10 @@ import json
 import logging
 import re
 import shutil
-import subprocess
-import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
-from posint_scanner import proxy
+from posint_scanner import proxy, toolrun
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +57,8 @@ CHECKOV_TIMEOUT_SECONDS = 900
 PROWLER_TIMEOUT_SECONDS = 3600
 SCOUTSUITE_TIMEOUT_SECONDS = 3600
 CLONE_TIMEOUT_SECONDS = 180
+# A clone growing past this on disk is killed and skipped (see clone_repo).
+MAX_CLONE_BYTES = 500 * 1024 * 1024
 
 SEVERITIES = ("critical", "high", "medium", "low", "info", "unknown")
 _SEVERITY_RANK = {name: i for i, name in enumerate(SEVERITIES)}
@@ -331,46 +331,71 @@ class _BinaryTool:
             logger.warning(reason)
         return reason is not None
 
-    def _run(self, args: list[str], timeout: int) -> subprocess.CompletedProcess | None:
-        """Run the binary with `args` (the binary itself is prepended). Callers
-        guard with `_missing()` first, so the binary is known present here."""
-        assert self._binary is not None
-        try:
-            return subprocess.run(
-                [self._binary, *args], capture_output=True, text=True, timeout=timeout
+    def _db_missing(self, path: Path) -> bool:
+        """Whether the tool's downloaded database (filled by `posint-scanner
+        update-dbs`, never mid-scan) is absent - the stage is skipped then."""
+        if path.exists():
+            return False
+        if not self._warned:
+            self._warned = True
+            logger.warning(
+                "%s database not found at %s - run `posint-scanner update-dbs`; "
+                "skipping its scan stage", self.binary_name, path,
             )
-        except (subprocess.SubprocessError, OSError) as exc:
-            logger.warning("%s run failed: %s", self.binary_name, exc)
-            return None
+        return True
+
+    def _run(
+        self, args: list[str], timeout: int, workspace: Path, env: dict[str, str] | None = None
+    ) -> toolrun.ToolResult | None:
+        """Run the binary with `args` (the binary itself is prepended) inside
+        `workspace`. Callers guard with `_missing()` first, so the binary is
+        known present here."""
+        assert self._binary is not None
+        return toolrun.run_tool(
+            [self._binary, *args], timeout=timeout, cwd=workspace, env=env
+        )
 
 
 class TrivyScanner(_BinaryTool):
     """`trivy image <ref>` and `trivy fs <path>` - vulnerable dependencies,
-    misconfigurations and secrets in a container image or a filesystem tree."""
+    misconfigurations and secrets in a container image or a filesystem tree.
+
+    Its vulnerability DBs are read from the cache dir and never updated here;
+    image layers are cached in memory only, so a scan writes nothing to disk
+    beyond its workspace."""
 
     binary_name = "trivy"
 
-    def _scan(self, mode: str, target: str) -> list[dict]:
-        if self._missing():
+    def _scan(self, mode: str, target: str, report: toolrun.ReportSink | None) -> list[dict]:
+        cache = toolrun.cache_dir("trivy")
+        if self._missing() or self._db_missing(cache / "db" / "trivy.db"):
             return []
         args = [
             mode,
             "--quiet",
             "--format", "json",
             "--scanners", "vuln,misconfig,secret",
+            "--cache-dir", str(cache),
+            "--cache-backend", "memory",
+            "--skip-db-update",
+            "--skip-java-db-update",
+            "--skip-check-update",
             *self.extra_args,
             target,
         ]
-        proc = self._run(args, TRIVY_TIMEOUT_SECONDS)
+        with toolrun.workspace("trivy") as workspace:
+            proc = self._run(args, TRIVY_TIMEOUT_SECONDS, workspace)
         if proc is None or not proc.stdout:
             return []
-        return parse_trivy(proc.stdout, target)
+        findings = parse_trivy(proc.stdout, target)
+        toolrun.emit(report, target, findings, text=proc.stdout)
+        return findings
 
-    def scan_image(self, ref: str) -> list[dict]:
-        return self._scan("image", ref)
+    def scan_image(self, ref: str, report: toolrun.ReportSink | None = None) -> list[dict]:
+        return self._scan("image", ref, report)
 
-    def scan_fs(self, path: str) -> list[dict]:
-        return self._scan("fs", path)
+    def scan_fs(self, path: str, report: toolrun.ReportSink | None = None) -> list[dict]:
+        return self._scan("fs", path, report)
 
 
 class CheckovScanner(_BinaryTool):
@@ -379,7 +404,7 @@ class CheckovScanner(_BinaryTool):
 
     binary_name = "checkov"
 
-    def scan_dir(self, path: str) -> list[dict]:
+    def scan_dir(self, path: str, report: toolrun.ReportSink | None = None) -> list[dict]:
         if self._missing():
             return []
         args = [
@@ -389,12 +414,15 @@ class CheckovScanner(_BinaryTool):
             "--quiet",
             *self.extra_args,
         ]
-        proc = self._run(args, CHECKOV_TIMEOUT_SECONDS)
+        with toolrun.workspace("checkov") as workspace:
+            proc = self._run(args, CHECKOV_TIMEOUT_SECONDS, workspace)
         # checkov exits non-zero when it finds failures - that's expected, so
         # we parse stdout regardless of return code.
         if proc is None or not proc.stdout:
             return []
-        return parse_checkov(proc.stdout, path)
+        findings = parse_checkov(proc.stdout, path)
+        toolrun.emit(report, path, findings, text=proc.stdout)
+        return findings
 
 
 class ProwlerScanner(_BinaryTool):
@@ -404,31 +432,34 @@ class ProwlerScanner(_BinaryTool):
 
     binary_name = "prowler"
 
-    def scan(self, provider: str) -> list[dict]:
+    def scan(self, provider: str, report: toolrun.ReportSink | None = None) -> list[dict]:
         if self._missing():
             return []
-        with tempfile.TemporaryDirectory(prefix="posint-prowler-") as tmp:
+        with toolrun.workspace("prowler") as workspace:
             args = [
                 provider,
                 "-M", "json-ocsf",
-                "--output-directory", tmp,
+                "--output-directory", str(workspace),
                 "--output-filename", "prowler",
                 *self.extra_args,
             ]
-            proc = self._run(args, PROWLER_TIMEOUT_SECONDS)
+            proc = self._run(args, PROWLER_TIMEOUT_SECONDS, workspace)
             if proc is None:
                 return []
             # Prefer the JSON file (stdout is a progress bar); fall back to
             # stdout for a version that streams JSON there.
-            for candidate in sorted(Path(tmp).glob("*.json")):
+            for candidate in sorted(workspace.glob("*.json")):
                 try:
                     text = candidate.read_text()
                 except OSError:
                     continue
                 findings = parse_prowler(text, provider)
                 if findings:
+                    toolrun.emit(report, provider, findings, path=candidate)
                     return findings
-            return parse_prowler(proc.stdout, provider)
+            findings = parse_prowler(proc.stdout, provider)
+            toolrun.emit(report, provider, findings, text=proc.stdout)
+            return findings
 
 
 class ScoutSuiteScanner(_BinaryTool):
@@ -437,40 +468,57 @@ class ScoutSuiteScanner(_BinaryTool):
 
     binary_name = "scout"
 
-    def scan(self, provider: str) -> list[dict]:
+    def scan(self, provider: str, report: toolrun.ReportSink | None = None) -> list[dict]:
         if self._missing():
             return []
-        with tempfile.TemporaryDirectory(prefix="posint-scoutsuite-") as tmp:
+        with toolrun.workspace("scoutsuite") as workspace:
             args = [
                 provider,
-                "--report-dir", tmp,
+                "--report-dir", str(workspace),
                 "--no-browser",
                 "--force",
                 *self.extra_args,
             ]
-            proc = self._run(args, SCOUTSUITE_TIMEOUT_SECONDS)
+            proc = self._run(args, SCOUTSUITE_TIMEOUT_SECONDS, workspace)
             if proc is None:
                 return []
-            for candidate in Path(tmp).rglob("scoutsuite_results_*.js"):
+            for candidate in workspace.rglob("scoutsuite_results_*.js"):
                 try:
-                    return parse_scoutsuite(candidate.read_text(), provider)
+                    findings = parse_scoutsuite(candidate.read_text(), provider)
                 except OSError:
                     continue
+                toolrun.emit(report, provider, findings, path=candidate)
+                return findings
+            toolrun.emit(report, provider, [])
             return []
 
 
-def clone_repo(url: str, dest: str, timeout: int = CLONE_TIMEOUT_SECONDS) -> bool:
-    """Shallow-clone `url` into `dest` for filesystem scanning. Returns whether
-    it succeeded; a no-op False when `git` isn't installed. Never raises."""
+def clone_repo(
+    url: str,
+    dest: str | Path,
+    timeout: int = CLONE_TIMEOUT_SECONDS,
+    max_bytes: int = MAX_CLONE_BYTES,
+) -> bool:
+    """Shallow-clone `url` into `dest` (inside a workspace) for filesystem
+    scanning. A clone growing past `max_bytes` on disk is killed. Returns
+    whether it succeeded; a no-op False when `git` isn't installed. Never
+    raises."""
     git = shutil.which("git")
     if git is None:
         logger.warning("git not on PATH - cannot clone %s for scanning", url)
         return False
-    cmd = [git, "clone", "--depth", "1", "--quiet", url, dest]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except (subprocess.SubprocessError, OSError) as exc:
-        logger.warning("git clone of %s failed: %s", url, exc)
+    dest = Path(dest)
+    cmd = [git, "clone", "--depth", "1", "--single-branch", "--quiet", url, str(dest)]
+    proc = toolrun.run_tool(
+        cmd,
+        timeout=timeout,
+        cwd=dest.parent,
+        # Never block on a credential prompt for a private/missing repo.
+        env={"GIT_TERMINAL_PROMPT": "0"},
+        size_limit=(dest, max_bytes),
+    )
+    if proc is None:
+        logger.warning("git clone of %s failed or was stopped - skipping it", url)
         return False
     if proc.returncode != 0:
         logger.warning("git clone of %s failed: %s", url, proc.stderr.strip()[:200])

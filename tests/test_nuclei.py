@@ -59,7 +59,7 @@ class TestScanner:
 
     def test_no_targets_no_run(self, monkeypatch):
         monkeypatch.setattr("posint_scanner.nuclei.shutil.which", lambda _: "/usr/bin/nuclei")
-        with patch("posint_scanner.nuclei.subprocess.run") as run:
+        with patch("posint_scanner.toolrun.run_tool") as run:
             assert NucleiScanner().scan([]) == []
         run.assert_not_called()
 
@@ -79,7 +79,7 @@ class TestScanner:
             captured["cmd"] = cmd
             return Done()
 
-        with patch("posint_scanner.nuclei.subprocess.run", side_effect=fake_run):
+        with patch("posint_scanner.toolrun.run_tool", side_effect=fake_run):
             findings = NucleiScanner().scan(["http://geo.dns-net.de:8080/geoserver/web/"])
 
         assert [f["template_id"] for f in findings] == ["CVE-2024-36401", "ssl-dns-names"]
@@ -100,12 +100,12 @@ class TestScanner:
             captured["cmd"] = cmd
             return Done()
 
-        with patch("posint_scanner.nuclei.subprocess.run", side_effect=fake_run):
+        with patch("posint_scanner.toolrun.run_tool", side_effect=fake_run):
             NucleiScanner(templates_dir="/data/nuclei-templates").scan(["http://h/"])
         assert "-t" in captured["cmd"]
         assert "/data/nuclei-templates" in captured["cmd"]
 
-    def test_subprocess_failure_is_swallowed(self, monkeypatch):
+    def test_tool_failure_is_swallowed(self, monkeypatch):
         monkeypatch.setattr("posint_scanner.nuclei.shutil.which", lambda _: "/usr/bin/nuclei")
-        with patch("posint_scanner.nuclei.subprocess.run", side_effect=OSError("boom")):
+        with patch("posint_scanner.toolrun.run_tool", return_value=None):
             assert NucleiScanner().scan(["http://h/"]) == []

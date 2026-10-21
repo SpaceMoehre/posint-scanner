@@ -160,11 +160,11 @@ class TestScannerRuns:
 
             return Done()
 
-        with patch("posint_scanner.cloudscan.subprocess.run", side_effect=fake_run):
+        with patch("posint_scanner.toolrun.run_tool", side_effect=fake_run):
             findings = NiktoScanner().scan(["https://example.com:443/"])
         assert len(findings) == 2
 
-    def test_wpscan_passes_token_and_parses(self, monkeypatch):
+    def test_wpscan_passes_token_and_parses(self, monkeypatch, wpscan_db):
         monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: "/usr/bin/wpscan")
         captured = {}
 
@@ -177,7 +177,7 @@ class TestScannerRuns:
 
             return Done()
 
-        with patch("posint_scanner.cloudscan.subprocess.run", side_effect=fake_run):
+        with patch("posint_scanner.toolrun.run_tool", side_effect=fake_run):
             findings = WpscanScanner(api_token="TOK").scan(["https://example.com/"])
         assert findings  # parsed despite non-zero exit
         assert "--api-token" in captured["cmd"]
@@ -199,7 +199,7 @@ class TestScannerRuns:
 
             return Done()
 
-        with patch("posint_scanner.cloudscan.subprocess.run", side_effect=fake_run):
+        with patch("posint_scanner.toolrun.run_tool", side_effect=fake_run):
             findings = TakeoverScanner().scan(["assets.example.com", "assets.example.com", ""])
         assert len(findings) == 1
         assert captured["hosts"] == ["assets.example.com"]  # deduped, blank dropped

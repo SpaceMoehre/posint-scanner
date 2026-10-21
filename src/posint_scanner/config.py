@@ -97,6 +97,7 @@ class CloudScanConfig(BaseModel):
     scoutsuite_extra_args: list[str] = Field(default_factory=list)
     # Bounds so a scan can't clone/scan an unbounded number of artifacts.
     clone_timeout_seconds: int = 180
+    max_clone_mb: int = 500  # a clone growing past this is killed and skipped
     max_repos: int = 25
     max_images: int = 25
 

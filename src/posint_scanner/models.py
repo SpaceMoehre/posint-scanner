@@ -59,6 +59,23 @@ class EmailAddress(BaseModel):
     url: str | None = None  # a page the address was seen on
 
 
+class Report(BaseModel):
+    """A tool's raw report, lzma-compressed (see toolrun.py)."""
+
+    data: bytes
+    raw_size: int
+
+
+class ToolReport(BaseModel):
+    """A raw report a source's external tool produced for one target. `report`
+    None means the run found nothing - any stored report for the same
+    (tool, target) is dropped rather than left stale."""
+
+    tool: str
+    target: str
+    report: Report | None = None
+
+
 class EnrichmentResult(BaseModel):
     """Data returned by an enrichment source for one target (an IP or a hostname)."""
 
@@ -78,3 +95,6 @@ class EnrichmentResult(BaseModel):
     code_exposures: list[CodeExposure] = Field(default_factory=list)
     # Email addresses at the target domain (domain-level sources).
     email_addresses: list[EmailAddress] = Field(default_factory=list)
+    # Raw reports of the external tools the source ran (theHarvester,
+    # gitleaks, trufflehog), stored compressed in tool_outputs.
+    tool_reports: list[ToolReport] = Field(default_factory=list)

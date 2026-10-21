@@ -47,13 +47,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-import tempfile
 from pathlib import Path
 
 # Reuse cloudscan's shared plumbing: the binary locator/runner base, the
 # severity scale and its normaliser. These three tools are the same "thin
 # wrapper around an opt-in binary" as the cloud scanners.
-from posint_scanner import proxy
+from posint_scanner import proxy, toolrun
 from posint_scanner.cloudscan import _BinaryTool
 
 logger = logging.getLogger(__name__)
@@ -269,20 +268,20 @@ class NiktoScanner(_BinaryTool):
 
     binary_name = "nikto"
 
-    def scan(self, urls: list[str]) -> list[dict]:
+    def scan(self, urls: list[str], report: toolrun.ReportSink | None = None) -> list[dict]:
         # Nikto only speaks HTTP proxies, not SOCKS.
         if self._missing() or self._proxy_blocked():
             return []
         findings: list[dict] = []
         for url in dict.fromkeys(u for u in urls if u):  # dedupe, keep order
-            findings += self._scan_one(url)
+            findings += self._scan_one(url, report)
         return findings
 
-    def _scan_one(self, url: str) -> list[dict]:
+    def _scan_one(self, url: str, report: toolrun.ReportSink | None) -> list[dict]:
         # Nikto writes JSON to a file (stdout carries its progress chatter), so
-        # point -output at a temp file and read it back.
-        with tempfile.TemporaryDirectory(prefix="posint-nikto-") as tmp:
-            out = Path(tmp) / "nikto.json"
+        # point -output into the workspace and read it back.
+        with toolrun.workspace("nikto") as workspace:
+            out = workspace / "nikto.json"
             args = [
                 "-h", url,
                 "-Format", "json",
@@ -291,19 +290,28 @@ class NiktoScanner(_BinaryTool):
                 "-ask", "no",
                 *self.extra_args,
             ]
-            proc = self._run(args, NIKTO_TIMEOUT_SECONDS)
+            proc = self._run(args, NIKTO_TIMEOUT_SECONDS, workspace)
             if proc is None:
                 return []
             try:
                 text = out.read_text()
             except OSError:
-                text = proc.stdout  # some builds honour `-output -`/stream to stdout
-            return parse_nikto(text, url)
+                # some builds honour `-output -`/stream to stdout
+                findings = parse_nikto(proc.stdout, url)
+                toolrun.emit(report, url, findings, text=proc.stdout)
+                return findings
+            findings = parse_nikto(text, url)
+            toolrun.emit(report, url, findings, path=out)
+            return findings
 
 
 class WpscanScanner(_BinaryTool):
     """`wpscan --url <url> --format json` - one URL at a time; a fast no-op on a
-    non-WordPress site. An optional API token unlocks the vulnerability data."""
+    non-WordPress site. An optional API token unlocks the vulnerability data.
+
+    Its vulnerability DB lives under HOME, so HOME points at the read-only
+    cache dir (filled by `posint-scanner update-dbs`) and its HTTP cache at the
+    run's workspace."""
 
     binary_name = "wpscan"
 
@@ -311,35 +319,40 @@ class WpscanScanner(_BinaryTool):
         super().__init__(extra_args)
         self.api_token = api_token or None
 
-    def scan(self, urls: list[str]) -> list[dict]:
-        if self._missing():
+    def scan(self, urls: list[str], report: toolrun.ReportSink | None = None) -> list[dict]:
+        home = toolrun.cache_dir("wpscan")
+        if self._missing() or self._db_missing(home / ".wpscan" / "db"):
             return []
         findings: list[dict] = []
         for url in dict.fromkeys(u for u in urls if u):
-            findings += self._scan_one(url)
+            findings += self._scan_one(url, home, report)
         return findings
 
-    def _scan_one(self, url: str) -> list[dict]:
-        args = [
-            "--url", url,
-            "--format", "json",
-            "--no-banner",
-            "--no-update",
-            # Don't let a missing-token warning or a WAF block turn into a
-            # non-zero-only run with nothing on stdout.
-            "--disable-tls-checks",
-        ]
-        if self.api_token:
-            args += ["--api-token", self.api_token]
-        if settings := proxy.active():
-            args += ["--proxy", settings.url()]  # libcurl: socks5h = remote DNS
-        args += self.extra_args
-        proc = self._run(args, WPSCAN_TIMEOUT_SECONDS)
+    def _scan_one(self, url: str, home: Path, report: toolrun.ReportSink | None) -> list[dict]:
+        with toolrun.workspace("wpscan") as workspace:
+            args = [
+                "--url", url,
+                "--format", "json",
+                "--no-banner",
+                "--no-update",
+                "--cache-dir", str(workspace / "cache"),
+                # Don't let a missing-token warning or a WAF block turn into a
+                # non-zero-only run with nothing on stdout.
+                "--disable-tls-checks",
+            ]
+            if self.api_token:
+                args += ["--api-token", self.api_token]
+            if settings := proxy.active():
+                args += ["--proxy", settings.url()]  # libcurl: socks5h = remote DNS
+            args += self.extra_args
+            proc = self._run(args, WPSCAN_TIMEOUT_SECONDS, workspace, env={"HOME": str(home)})
         # wpscan exits non-zero when it finds vulnerabilities - expected, so we
         # parse stdout regardless of return code.
         if proc is None or not proc.stdout:
             return []
-        return parse_wpscan(proc.stdout, url)
+        findings = parse_wpscan(proc.stdout, url)
+        toolrun.emit(report, url, findings, text=proc.stdout)
+        return findings
 
 
 class TakeoverScanner(_BinaryTool):
@@ -348,19 +361,21 @@ class TakeoverScanner(_BinaryTool):
 
     binary_name = "takeover"
 
-    def scan(self, hosts: list[str]) -> list[dict]:
+    def scan(self, hosts: list[str], report: toolrun.ReportSink | None = None) -> list[dict]:
         # takeover resolves CNAMEs with local DNS - that can't be tunnelled.
         if self._missing() or self._proxy_blocked():
             return []
         targets = [h for h in dict.fromkeys(hosts) if h]  # dedupe, keep order
         if not targets:
             return []
-        with tempfile.TemporaryDirectory(prefix="posint-takeover-") as tmp:
-            list_file = Path(tmp) / "hosts.txt"
+        with toolrun.workspace("takeover") as workspace:
+            list_file = workspace / "hosts.txt"
             list_file.write_text("\n".join(targets))
-            report = Path(tmp) / "report.json"
-            args = ["-l", str(list_file), "-o", str(report), *self.extra_args]
-            proc = self._run(args, TAKEOVER_TIMEOUT_SECONDS)
-            if proc is None or not report.exists():
+            out = workspace / "report.json"
+            args = ["-l", str(list_file), "-o", str(out), *self.extra_args]
+            proc = self._run(args, TAKEOVER_TIMEOUT_SECONDS, workspace)
+            if proc is None or not out.exists():
                 return []
-            return parse_takeover(report.read_text())
+            findings = parse_takeover(out.read_text())
+            toolrun.emit(report, "hostnames", findings, path=out)
+            return findings

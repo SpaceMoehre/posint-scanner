@@ -22,11 +22,9 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 
-from posint_scanner import proxy
+from posint_scanner import proxy, toolrun
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +81,7 @@ class NucleiScanner:
     def available(self) -> bool:
         return self._binary is not None
 
-    def scan(self, urls: list[str]) -> list[dict]:
+    def scan(self, urls: list[str], report: toolrun.ReportSink | None = None) -> list[dict]:
         """Run Nuclei against `urls` and return parsed findings, or [] (never
         raises). No-op when the binary is missing or there are no targets."""
         targets = [u for u in dict.fromkeys(urls) if u]  # dedupe, keep order
@@ -94,12 +92,12 @@ class NucleiScanner:
                 self._warned = True
                 logger.warning("nuclei not on PATH - skipping active template scan")
             return []
-        return self._run(targets)
+        return self._run(targets, report)
 
-    def _run(self, targets: list[str]) -> list[dict]:
+    def _run(self, targets: list[str], report: toolrun.ReportSink | None) -> list[dict]:
         assert self._binary is not None  # guarded by scan()
-        with tempfile.TemporaryDirectory(prefix="posint-nuclei-") as tmp:
-            targets_file = Path(tmp) / "targets.txt"
+        with toolrun.workspace("nuclei") as workspace:
+            targets_file = workspace / "targets.txt"
             targets_file.write_text("\n".join(targets))
             cmd = [
                 self._binary,
@@ -109,21 +107,36 @@ class NucleiScanner:
                 "-no-color",
                 "-disable-update-check",  # never self-update mid-scan
             ]
-            if self.templates_dir:
-                cmd += ["-t", self.templates_dir]
+            templates = self.templates_dir or _default_templates_dir()
+            if templates:
+                cmd += ["-t", templates]
             if proxy_url := proxy.tool_proxy_url():
                 cmd += ["-proxy", proxy_url]
             cmd += self.extra_args
-            try:
-                proc = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=NUCLEI_TIMEOUT_SECONDS,
-                )
-            except (subprocess.SubprocessError, OSError) as exc:
-                logger.warning("nuclei run failed: %s", exc)
-                return []
+            # nuclei keeps config and resume files under HOME/XDG dirs; point
+            # them into the workspace so they go with it.
+            env = {
+                "HOME": str(workspace),
+                "XDG_CONFIG_HOME": str(workspace / ".config"),
+                "XDG_CACHE_HOME": str(workspace / ".cache"),
+                "XDG_DATA_HOME": str(workspace / ".local" / "share"),
+            }
+            proc = toolrun.run_tool(
+                cmd, timeout=NUCLEI_TIMEOUT_SECONDS, cwd=workspace, env=env
+            )
+        if proc is None:
+            return []
         findings = []
         for line in proc.stdout.splitlines():
             parsed = parse_nuclei_line(line)
             if parsed is not None:
                 findings.append(parsed)
+        toolrun.emit(report, ",".join(targets), findings, text=proc.stdout)
         return findings
+
+
+def _default_templates_dir() -> str | None:
+    """nuclei's own template dir in the real home - found there before HOME
+    is pointed at the workspace."""
+    path = Path.home() / "nuclei-templates"
+    return str(path) if path.is_dir() else None

@@ -76,7 +76,7 @@ class TestTheHarvester:
     def test_runs_cli_and_reads_json_report(self):
         run = self._fake_run({"emails": ["a@example.com"], "hosts": ["mx.example.com"]})
         with patch("shutil.which", return_value="/usr/bin/theHarvester"), \
-             patch("subprocess.run", side_effect=run) as mock_run:
+             patch("posint_scanner.toolrun.run_tool", side_effect=run) as mock_run:
             result = TheHarvesterSource(backends="crtsh,bing").collect("example.com")
         cmd = mock_run.call_args.args[0]
         assert cmd[:5] == ["/usr/bin/theHarvester", "-d", "example.com", "-b", "crtsh,bing"]
@@ -86,7 +86,7 @@ class TestTheHarvester:
 
     def test_failed_run_without_report_raises(self):
         with patch("shutil.which", return_value="/usr/bin/theHarvester"), \
-             patch("subprocess.run", side_effect=self._fake_run(None, returncode=1)):
+             patch("posint_scanner.toolrun.run_tool", side_effect=self._fake_run(None, returncode=1)):
             with pytest.raises(RuntimeError, match="boom"):
                 TheHarvesterSource().collect("example.com")
 

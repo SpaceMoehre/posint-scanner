@@ -19,6 +19,9 @@ Schema (documented in detail in SCHEMA.md):
                       related to its targets, for review (never auto-scanned)
     cloud_assets   - cloud storage buckets (S3/GCS/Azure) a scan found for a
                       domain, with their public/private exposure
+    tool_outputs   - the latest raw report of each external tool (nikto,
+                      trivy, ...) per domain and target, lzma-compressed -
+                      tools' report files live here, never on disk
     settings       - key/value app settings edited in the web UI (see
                       settings.py)
 """
@@ -33,6 +36,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar
+
+from posint_scanner.models import Report
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -190,6 +195,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_code_exposures_identity ON code_exposures(
     domain_id, repo, path, target, kind, COALESCE(rule, ''), COALESCE(secret, '')
 );
 
+CREATE TABLE IF NOT EXISTS tool_outputs (
+    id INTEGER PRIMARY KEY,
+    domain_id INTEGER NOT NULL REFERENCES domains(id),
+    tool TEXT NOT NULL,
+    target TEXT NOT NULL,          -- what the tool ran against (URL, IP, repo, ...)
+    content BLOB NOT NULL,         -- the raw report, lzma-compressed
+    raw_size INTEGER NOT NULL,     -- uncompressed size in bytes
+    created_at TEXT NOT NULL,
+    UNIQUE (domain_id, tool, target)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -211,6 +227,7 @@ class Database:
     # busy timeout that reader raises OperationalError (a 500 in the UI) the
     # instant the writer holds the lock.
     BUSY_TIMEOUT_MS = 10_000
+    WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
 
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
@@ -227,6 +244,9 @@ class Database:
         # WAL and has no cross-connection sharing anyway, so skip it there.
         if self.path != ":memory:":
             self.conn.execute("PRAGMA journal_mode = WAL")
+            # Cap what a checkpointed WAL may keep on disk; without it the file
+            # stays at its high-water mark (which a long scan can push far).
+            self.conn.execute(f"PRAGMA journal_size_limit = {self.WAL_SIZE_LIMIT_BYTES}")
         self.conn.execute(f"PRAGMA busy_timeout = {self.BUSY_TIMEOUT_MS}")
 
     def __enter__(self) -> Database:
@@ -576,7 +596,10 @@ class Database:
                 f"DELETE FROM resolutions WHERE hostname_id IN ({hostname_ids})", (domain_id,)
             )
             self.conn.execute("DELETE FROM hostnames WHERE domain_id = ?", (domain_id,))
-            for table in ("candidate_domains", "cloud_assets", "code_exposures", "email_addresses"):
+            for table in (
+                "candidate_domains", "cloud_assets", "code_exposures", "email_addresses",
+                "tool_outputs",
+            ):
                 self.conn.execute(f"DELETE FROM {table} WHERE domain_id = ?", (domain_id,))
             self.conn.execute("DELETE FROM domains WHERE id = ?", (domain_id,))
         except Exception:
@@ -829,6 +852,58 @@ class Database:
             "ORDER BY CASE kind WHEN 'secret' THEN 0 ELSE 1 END, repo, path",
             (target,),
         ).fetchall()
+
+    # -- tool outputs -------------------------------------------------------
+
+    @_locked
+    def save_tool_output(
+        self, domain_id: int, tool: str, target: str, report: Report | None,
+        now: str | None = None,
+    ) -> None:
+        """Replace the stored report for (domain, tool, target). None - the run
+        found nothing - deletes it, so a report from an earlier scan never
+        outlives the result it described."""
+        if report is None:
+            self.conn.execute(
+                "DELETE FROM tool_outputs WHERE domain_id = ? AND tool = ? AND target = ?",
+                (domain_id, tool, target),
+            )
+        else:
+            self.conn.execute(
+                """
+                INSERT INTO tool_outputs (domain_id, tool, target, content, raw_size, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(domain_id, tool, target) DO UPDATE SET
+                    content = excluded.content,
+                    raw_size = excluded.raw_size,
+                    created_at = excluded.created_at
+                """,
+                (domain_id, tool, target, report.data, report.raw_size, now or _now()),
+            )
+        self.conn.commit()
+
+    @_locked
+    def list_tool_outputs(self, domain_id: int) -> list[sqlite3.Row]:
+        """A domain's stored reports without their content (for listing)."""
+        return self.conn.execute(
+            "SELECT id, domain_id, tool, target, length(content) AS size, raw_size, created_at "
+            "FROM tool_outputs WHERE domain_id = ? ORDER BY tool, target",
+            (domain_id,),
+        ).fetchall()
+
+    @_locked
+    def get_tool_output(self, output_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM tool_outputs WHERE id = ?", (output_id,)
+        ).fetchone()
+
+    @_locked
+    def checkpoint(self) -> None:
+        """Fold the WAL back into the database file and truncate it, so a
+        long scan's write-ahead log doesn't linger on disk at full size.
+        Best effort: a reader holding a snapshot just makes it partial."""
+        if self.path != ":memory:":
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     # -- settings -----------------------------------------------------------
 

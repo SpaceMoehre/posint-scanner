@@ -14,12 +14,9 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
-import tempfile
-from pathlib import Path
 
-from posint_scanner import proxy
-from posint_scanner.models import EmailAddress, EnrichmentResult
+from posint_scanner import proxy, toolrun
+from posint_scanner.models import EmailAddress, EnrichmentResult, ToolReport
 from posint_scanner.sources.base import (
     DEFAULT_TTL_DAYS,
     Source,
@@ -90,17 +87,16 @@ class TheHarvesterSource(Source):
                 "theHarvester not found on PATH - install from "
                 "https://github.com/laramies/theHarvester"
             )
-        with tempfile.TemporaryDirectory(prefix="posint-theharvester-") as tmp:
-            report = Path(tmp) / "report"
-            result = subprocess.run(
+        with toolrun.workspace("theharvester") as workspace:
+            report = workspace / "report"
+            result = toolrun.run_tool(
                 [binary_path, "-d", domain, "-b", self.backends, "-l", str(self.limit),
                  "-f", str(report)],
-                capture_output=True,
-                text=True,
                 timeout=self.timeout_seconds,
-                check=False,
-                cwd=tmp,
+                cwd=workspace,
             )
+            if result is None:
+                raise RuntimeError("theHarvester did not finish (timed out or failed to start)")
             json_path = report.with_suffix(".json")
             if not json_path.exists():
                 if result.returncode != 0:
@@ -111,10 +107,12 @@ class TheHarvesterSource(Source):
                 data: dict = {}
             else:
                 data = json.loads(json_path.read_text() or "{}")
-        emails, hosts = parse_theharvester_json(domain, data)
+            emails, hosts = parse_theharvester_json(domain, data)
+            raw = toolrun.compress_file(json_path) if emails or hosts else None
         return EnrichmentResult(
             source=self.name, target_type="domain", target=domain,
             data={"backends": self.backends, "email_count": len(emails), "host_count": len(hosts)},
             email_addresses=emails,
             related_hostnames=hosts,
+            tool_reports=[ToolReport(tool=self.name, target=domain, report=raw)],
         )

@@ -16,14 +16,13 @@ import gc
 import ipaddress
 import json
 import logging
-import os
-import tempfile
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timezone
 
+from posint_scanner import toolrun
 from posint_scanner.asn import lookup_asn, lookup_asn_prefixes
 from posint_scanner.cloudscan import (
     CheckovScanner,
@@ -38,7 +37,7 @@ from posint_scanner.db import Database
 from posint_scanner.dns_resolve import lookup_domain_nameserver_ip, resolve_hostname
 from posint_scanner.exploitdb import SearchSploitClient
 from posint_scanner.governor import SourceGovernor
-from posint_scanner.models import DiscoveredHostname, EnrichmentResult
+from posint_scanner.models import DiscoveredHostname, EnrichmentResult, Report
 from posint_scanner.normalize import InvalidDomainError, dedup_domains, normalize_domain
 from posint_scanner.nuclei import NucleiScanner
 from posint_scanner.nvd import NvdClient, build_cpe, cpe_version
@@ -319,6 +318,7 @@ def _run_collection(
                         email.confidence, email.url,
                     )
                 _persist_code_exposures(db, domain_id, result)
+                _persist_tool_reports(db, domain_id, result)
             except Exception:
                 logger.exception("failed to persist %s result for %s", source.name, domain)
             if result.related_hostnames:
@@ -549,6 +549,29 @@ def _persist_code_exposures(db: Database, domain_id: int, result: EnrichmentResu
         )
 
 
+def _persist_tool_reports(db: Database, domain_id: int, result: EnrichmentResult) -> None:
+    """Store (or, for an empty run, drop) the raw reports of the external
+    tools a source ran."""
+    for item in result.tool_reports:
+        db.save_tool_output(domain_id, item.tool, item.target, item.report)
+
+
+def _report_sink(
+    db: Database, domain_id: int, tool: str, target: str | None = None
+) -> toolrun.ReportSink:
+    """Stores a tool run's raw report against the domain, keyed by `target`
+    when given, else by what the scanner reports it ran against."""
+
+    def sink(reported: str, report: Report | None) -> None:
+        key = target or reported
+        try:
+            db.save_tool_output(domain_id, tool, key, report)
+        except Exception:
+            logger.exception("failed to store %s report for %s - continuing", tool, key)
+
+    return sink
+
+
 def _run_enrichment(
     db: Database,
     sources: list[Source],
@@ -638,6 +661,7 @@ def _run_enrichment(
             try:
                 db.insert_result(result.source, target_type, target_id, result.data)
                 _persist_code_exposures(db, domain_id, result)
+                _persist_tool_reports(db, domain_id, result)
                 if target_type == "ip":
                     for service in result.services:
                         db.upsert_service(
@@ -1009,7 +1033,9 @@ def _run_nuclei(
             if not targets:
                 continue
             try:
-                findings = scanner.scan(targets)
+                findings = scanner.scan(
+                    targets, report=_report_sink(db, domain_id, "nuclei", ip_row["address"])
+                )
             except Exception:
                 logger.exception("nuclei scan failed for %s - continuing", ip_row["address"])
                 continue
@@ -1082,7 +1108,7 @@ def _run_web_app_scan(
                 continue
             for name, scanner in runs:
                 try:
-                    findings = scanner.scan(targets)
+                    findings = scanner.scan(targets, report=_report_sink(db, domain_id, name))
                 except Exception:
                     logger.exception("%s scan failed for %s - continuing", name, ip_row["address"])
                     continue
@@ -1101,7 +1127,7 @@ def _run_web_app_scan(
 
 
 def _run_takeover(
-    db: Database, domain_id: int, enabled: bool, scanner: TakeoverScanner
+    db: Database, domain: str, domain_id: int, enabled: bool, scanner: TakeoverScanner
 ) -> None:
     """Active subdomain-takeover scan (opt-in). Run `takeover` over every
     discovered hostname for the domain in one pass and persist each claimable
@@ -1114,7 +1140,9 @@ def _run_takeover(
     if not hostname_ids:
         return
     try:
-        findings = scanner.scan(list(hostname_ids))
+        findings = scanner.scan(
+            list(hostname_ids), report=_report_sink(db, domain_id, "takeover", domain)
+        )
     except Exception:
         logger.exception("takeover scan failed for domain %s - continuing", domain_id)
         return
@@ -1227,7 +1255,7 @@ def _run_artifact_scan(
     if trivy.available:
         for ref in _image_refs_to_scan(db, domain_id, domain, cfg):
             try:
-                findings = trivy.scan_image(ref)
+                findings = trivy.scan_image(ref, report=_report_sink(db, domain_id, "trivy"))
             except Exception:
                 logger.exception("trivy image scan failed for %s - continuing", ref)
                 continue
@@ -1238,14 +1266,21 @@ def _run_artifact_scan(
     repo_urls = _repo_urls_to_scan(db, domain_id, cfg.repos, cfg.max_repos)
     if not repo_urls or not (trivy.available or checkov.available):
         return
-    with tempfile.TemporaryDirectory(prefix="posint-repos-") as tmp:
-        for index, url in enumerate(repo_urls):
-            dest = os.path.join(tmp, f"repo{index}")
-            if not clone_repo(url, dest, timeout=cfg.clone_timeout_seconds):
+    # One clone at a time, each deleted as soon as both tools are done with
+    # it - disk use peaks at one repo, never the whole list.
+    for url in repo_urls:
+        with toolrun.workspace("clone") as workspace:
+            dest = workspace / "repo"
+            if not clone_repo(
+                url, dest, timeout=cfg.clone_timeout_seconds,
+                max_bytes=cfg.max_clone_mb * 1024 * 1024,
+            ):
                 continue
             if checkov.available:
                 try:
-                    findings = checkov.scan_dir(dest)
+                    findings = checkov.scan_dir(
+                        str(dest), report=_report_sink(db, domain_id, "checkov", url)
+                    )
                 except Exception:
                     logger.exception("checkov scan failed for %s - continuing", url)
                     findings = []
@@ -1254,7 +1289,9 @@ def _run_artifact_scan(
                     logger.info("checkov: %d finding(s) in %s", len(findings), url)
             if trivy.available:
                 try:
-                    findings = trivy.scan_fs(dest)
+                    findings = trivy.scan_fs(
+                        str(dest), report=_report_sink(db, domain_id, "trivy", url)
+                    )
                 except Exception:
                     logger.exception("trivy fs scan failed for %s - continuing", url)
                     findings = []
@@ -1285,7 +1322,7 @@ def _run_cloud_audit(
             if not scanner.available:
                 continue
             try:
-                findings = scanner.scan(provider)
+                findings = scanner.scan(provider, report=_report_sink(db, domain_id, source))
             except Exception:
                 logger.exception("%s audit of %s failed - continuing", source, provider)
                 continue
@@ -1448,7 +1485,7 @@ def _run_domain_pipeline(
         )
         _end_stage(control)
         control.progress("subdomain takeover", domain)
-        _run_takeover(db, domain_id, takeover_scan, takeover_scanner)
+        _run_takeover(db, domain, domain_id, takeover_scan, takeover_scanner)
         _end_stage(control)
         control.progress("cloud scan", domain)
         _run_artifact_scan(db, domain, domain_id, cloud_scan, trivy, checkov, cloudscan_config)
@@ -1496,6 +1533,9 @@ def run_scan(
     # Global proxy from the Settings page; raises before anything is sent if
     # a configured proxy is unreachable.
     apply_settings(db)
+    # External tools work in scratch dirs next to the DB; this also clears
+    # what a killed earlier run left there.
+    toolrun.configure(db.path)
     active_sources = []
     for source in filter_by_name(sources, source_filter):
         if source.is_configured:
@@ -1593,3 +1633,8 @@ def run_scan(
             if not control.cancelled():
                 pending |= {submit(domain) for domain in targets.take_queued()}
     _release_cycles(force=True)
+    toolrun.release()
+    try:
+        db.checkpoint()
+    except Exception:
+        logger.exception("WAL checkpoint after the scan failed - continuing")

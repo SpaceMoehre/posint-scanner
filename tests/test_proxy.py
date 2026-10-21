@@ -271,25 +271,31 @@ class TestTools:
 
     def test_untunnellable_scanners_skip(self):
         proxy.configure("127.0.0.1:9050")
-        with patch("shutil.which", return_value="/bin/x"), patch("subprocess.run") as run:
+        with patch("shutil.which", return_value="/bin/x"), \
+             patch("posint_scanner.toolrun.run_tool") as run:
             assert NiktoScanner().scan(["http://a/"]) == []
             assert TakeoverScanner().scan(["a.example.com"]) == []
         run.assert_not_called()
 
-    def test_tools_get_proxy_flag(self):
+    def test_tools_get_proxy_flag(self, wpscan_db):
         proxy.configure("127.0.0.1:9050")
-        with patch("shutil.which", return_value="/bin/x"), patch("subprocess.run") as run:
+        with patch("shutil.which", return_value="/bin/x"), \
+             patch("subprocess.run") as run, \
+             patch("posint_scanner.toolrun.run_tool") as tool_run:
             run.return_value.stdout = ""
+            tool_run.return_value.stdout = ""
             NucleiScanner().scan(["http://a/"])
             SubfinderSource().discover("example.com")
             WpscanScanner().scan(["http://a/"])
-        cmds = [c.args[0] for c in run.call_args_list]
-        assert cmds[0][cmds[0].index("-proxy") + 1] == "socks5://127.0.0.1:9050"
-        assert cmds[1][cmds[1].index("-proxy") + 1] == "socks5://127.0.0.1:9050"
-        assert cmds[2][cmds[2].index("--proxy") + 1] == "socks5h://127.0.0.1:9050"
+        nuclei, wpscan = (c.args[0] for c in tool_run.call_args_list)
+        subfinder = run.call_args.args[0]
+        assert nuclei[nuclei.index("-proxy") + 1] == "socks5://127.0.0.1:9050"
+        assert subfinder[subfinder.index("-proxy") + 1] == "socks5://127.0.0.1:9050"
+        assert wpscan[wpscan.index("--proxy") + 1] == "socks5h://127.0.0.1:9050"
 
     def test_no_proxy_flag_without_proxy(self):
-        with patch("shutil.which", return_value="/bin/x"), patch("subprocess.run") as run:
+        with patch("shutil.which", return_value="/bin/x"), \
+             patch("posint_scanner.toolrun.run_tool") as run:
             run.return_value.stdout = ""
             NucleiScanner().scan(["http://a/"])
         assert "-proxy" not in run.call_args.args[0]

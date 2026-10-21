@@ -1,7 +1,7 @@
 import json
 import time
 import weakref
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -917,7 +917,7 @@ class TestNucleiStage:
             run_scan(db, ["example.com"], [FakeDiscoverySource(), self._fp_source()],
                      netblock_sweep=False, vuln_lookup=False, nuclei_scan=True)
 
-        scan.assert_called_once_with(["http://1.2.3.4:8080/geoserver/web/"])
+        scan.assert_called_once_with(["http://1.2.3.4:8080/geoserver/web/"], report=ANY)
         ip_id = db.get_ip_by_address("1.2.3.4")["id"]
         nuclei = [json.loads(r["data"]) for r in db.list_results_for_target("ip", ip_id)
                   if r["source"] == "nuclei"]
@@ -1059,7 +1059,7 @@ class TestCloudScanStage:
             run_scan(db, ["example.com"], [FakeDiscoverySource()], netblock_sweep=False,
                      vuln_lookup=False, cloud_scan=True,
                      cloudscan_config=CloudScanConfig(images=["acme/api:latest"]))
-        img.assert_called_once_with("acme/api:latest")
+        img.assert_called_once_with("acme/api:latest", report=ANY)
         domain_id = db.get_domain_by_name("example.com")["id"]
         results = [json.loads(r["data"]) for r in db.list_results_for_target("domain", domain_id)
                    if r["source"] == "trivy"]
@@ -1114,7 +1114,7 @@ class TestCloudScanStage:
             run_scan(db, ["example.com"], [FakeDiscoverySource(), ExposureSource()],
                      netblock_sweep=False, vuln_lookup=False, cloud_scan=True,
                      cloudscan_config=CloudScanConfig())
-        img.assert_called_once_with("1.2.3.4:5000/api:latest")
+        img.assert_called_once_with("1.2.3.4:5000/api:latest", report=ANY)
 
 
 class TestCloudAuditStage:
@@ -1146,7 +1146,7 @@ class TestCloudAuditStage:
             run_scan(db, ["example.com"], [FakeDiscoverySource()], netblock_sweep=False,
                      vuln_lookup=False, cloud_audit=True,
                      cloudscan_config=CloudScanConfig(providers=["aws"]))
-        pro.assert_called_once_with("aws")
+        pro.assert_called_once_with("aws", report=ANY)
         domain_id = db.get_domain_by_name("example.com")["id"]
         results = [json.loads(r["data"]) for r in db.list_results_for_target("domain", domain_id)
                    if r["source"] == "prowler"]

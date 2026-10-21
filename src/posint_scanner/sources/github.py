@@ -42,7 +42,7 @@ from urllib.parse import quote
 import requests
 
 from posint_scanner.asn import lookup_asn
-from posint_scanner.models import CodeExposure, EnrichmentResult
+from posint_scanner.models import CodeExposure, EnrichmentResult, Report, ToolReport
 from posint_scanner.retry import AuthError, with_retry
 from posint_scanner.scope import in_scope
 from posint_scanner.secret_scan import find_secrets
@@ -136,6 +136,7 @@ class _Search:
     target: str  # what the query named (domain or IP)
     matcher: re.Pattern[str]
     exposures: list[CodeExposure] = field(default_factory=list)
+    reports: list[ToolReport] = field(default_factory=list)  # gitleaks/trufflehog, per file
     found_names: set[str] = field(default_factory=set)
     total: int = 0
     kept_files: int = 0
@@ -237,9 +238,14 @@ class GitHubCodeSearchSource(Source):
         # Prefer the whole file for secret scanning (fragments are short); fall
         # back to the fragment when the file couldn't be fetched.
         scan_text = text if text is not None else fragment_text
+        file_key = f"{hit.repo}:{hit.path}@{hit.commit}"
+
+        def keep_report(tool: str, report: Report | None) -> None:
+            search.reports.append(ToolReport(tool=tool, target=file_key, report=report))
+
         secrets = (
             find_secrets(scan_text, use_gitleaks=self.use_gitleaks,
-                         use_trufflehog=self.use_trufflehog)
+                         use_trufflehog=self.use_trufflehog, report=keep_report)
             if scan_text else []
         )
 
@@ -318,6 +324,7 @@ class GitHubCodeSearchSource(Source):
             data={"total_hits": search.total, "overflowed": overflowed,
                   "files_examined": search.kept_files},
             code_exposures=search.exposures, related_hostnames=related,
+            tool_reports=search.reports,
         )
 
     def enrich(self, target: str, hostnames: list[str]) -> EnrichmentResult:
@@ -334,7 +341,7 @@ class GitHubCodeSearchSource(Source):
         return EnrichmentResult(
             source=self.name, target_type="ip", target=target,
             data={"searched": True, "total_hits": search.total, "files_examined": search.kept_files},
-            code_exposures=search.exposures,
+            code_exposures=search.exposures, tool_reports=search.reports,
         )
 
     def _skip_ip(self, ip: str, hostnames: list[str]) -> bool:

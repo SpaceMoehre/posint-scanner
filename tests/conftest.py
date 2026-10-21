@@ -5,6 +5,26 @@ import pytest
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def isolated_tool_dirs(tmp_path, monkeypatch):
+    """Tool workspaces and caches under the test's own tmp dir."""
+    from posint_scanner import toolrun
+
+    monkeypatch.setattr(toolrun, "_scratch_root", tmp_path / ".posint-scratch")
+    monkeypatch.setattr(toolrun, "_cache_root", tmp_path / ".posint-cache")
+    return tmp_path
+
+
+@pytest.fixture
+def wpscan_db():
+    """wpscan's vulnerability DB as `update-dbs` leaves it in the cache dir."""
+    from posint_scanner import toolrun
+
+    path = toolrun.cache_dir("wpscan") / ".wpscan" / "db"
+    path.mkdir(parents=True)
+    return path
+
+
 def load_fixture(source: str, name: str) -> str:
     """A response body captured from the real service (sanitized), stored at
     tests/fixtures/<source>/<name>. See tests/fixtures/README.md."""
