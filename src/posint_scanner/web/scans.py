@@ -99,10 +99,9 @@ class ScanJob:
 class ScanManager:
     """Thread-safe registry of scan jobs. One instance lives on the app."""
 
-    def __init__(self, db_path: str, config_path: str, vault_dir: str) -> None:
+    def __init__(self, db_path: str, config_path: str) -> None:
         self.db_path = db_path
         self.config_path = config_path
-        self.vault_dir = vault_dir
         self._jobs: dict[str, ScanJob] = {}
         self._lock = threading.Lock()
 

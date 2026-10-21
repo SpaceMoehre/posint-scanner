@@ -139,6 +139,25 @@ stored. Contents are never read.
 
 Unique on `(domain_id, provider, name)`. Kept across re-scans.
 
+### `tool_outputs`
+The raw report each external tool (nikto, wpscan, takeover, nuclei, trivy,
+checkov, prowler, scoutsuite, theHarvester, gitleaks, trufflehog) wrote for a
+target, so tools' report files never stay on disk. Parsed findings still go
+to `results`; this is the tool's own output, for reference and download.
+
+| column     | type | notes |
+|------------|------|-------|
+| id         | INTEGER PK | |
+| domain_id  | INTEGER NOT NULL REFERENCES domains(id) | |
+| tool       | TEXT NOT NULL | |
+| target     | TEXT NOT NULL | what the tool ran against: URL, IP, repo URL, image ref, cloud provider, domain, or `repo:path@commit` for the secret scanners |
+| content    | BLOB NOT NULL | the report, lzma-compressed (xz, preset 9e) |
+| raw_size   | INTEGER NOT NULL | uncompressed size in bytes |
+| created_at | TEXT NOT NULL | |
+
+Unique on `(domain_id, tool, target)`: a re-scan replaces the report, and a
+run that finds nothing deletes it. Deleted with the domain.
+
 ### `settings`
 Key/value app settings edited on the web UI's Settings page (see
 `settings.py`). Unset keys have no row.

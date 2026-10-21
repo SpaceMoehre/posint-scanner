@@ -7,7 +7,7 @@ services:
     # on a network you control and trust.
     ports:
       - "127.0.0.1:8000:8000"
-    # Persists the SQLite DB, the generated vault, and an optional config.yaml
+    # Persists the SQLite DB and an optional config.yaml
     # across container/image rebuilds. Drop config.yaml in ./data to use it;
     # the scanner runs fine without one.
     volumes:
@@ -17,4 +17,7 @@ services:
     # a local .env file (git-ignore it).
     # env_file:
     #   - .env
+    # Reaps processes scanner tools orphan, so none linger as zombies in the
+    # long-running server.
+    init: true
     restart: unless-stopped

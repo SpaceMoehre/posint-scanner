@@ -255,6 +255,7 @@ def build_domain(db: Database, name: str) -> dict | None:
         "cloud_assets": [dict(row) for row in db.list_cloud_assets(domain_row["id"])],
         "code_exposures": [dict(row) for row in db.list_code_exposures(domain_row["id"])],
         "email_addresses": [dict(row) for row in db.list_email_addresses(domain_row["id"])],
+        "tool_outputs": [dict(row) for row in db.list_tool_outputs(domain_row["id"])],
     }
 
 

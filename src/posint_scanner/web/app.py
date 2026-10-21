@@ -14,20 +14,26 @@ exposure to untrusted networks.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from starlette.background import BackgroundTask
 
-from posint_scanner import proxy
+from posint_scanner import proxy, toolrun
 from posint_scanner.config import load_config
 from posint_scanner.db import Database
-from posint_scanner.export.obsidian_export import export_obsidian
 from posint_scanner.export.zip_export import write_zip
 from posint_scanner.registry import describe_sources
 from posint_scanner.settings import AppSettings, load_settings, save_settings
@@ -35,16 +41,16 @@ from posint_scanner.web import views
 from posint_scanner.web.scans import ScanManager, ScanOptions
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+# Report formats that aren't plain JSON, for the download's file name.
+_REPORT_EXTENSIONS = {"nuclei": "jsonl", "trufflehog": "jsonl", "scoutsuite": "js"}
 
 
-def create_app(
-    db_path: str = "posint.db",
-    config_path: str = "config.yaml",
-    vault_dir: str = "./vault",
-) -> FastAPI:
+def create_app(db_path: str = "posint.db", config_path: str = "config.yaml") -> FastAPI:
     app = FastAPI(title="posint-scanner")
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
-    manager = ScanManager(db_path=db_path, config_path=config_path, vault_dir=vault_dir)
+    manager = ScanManager(db_path=db_path, config_path=config_path)
+    # Clears scratch dirs a killed earlier process left next to the DB.
+    toolrun.configure(db_path)
 
     # One shared read connection; ensure the schema exists so pages render
     # (empty) even before the first scan has written anything.
@@ -161,9 +167,22 @@ def create_app(
                 message=f"Not deleting {name} while a scan is running - try again once it finishes.",
             )
         db.delete_domain(row["id"])
-        # Keep the on-disk vault in step with the DB.
-        export_obsidian(db, Path(vault_dir))
         return RedirectResponse("/", status_code=303)
+
+    @app.get("/reports/{output_id}", response_model=None)
+    def download_report(request: Request, output_id: int):
+        """A stored tool report, decompressed on the fly - nothing hits disk."""
+        row = db.get_tool_output(output_id)
+        if row is None:
+            return page("not_found.html", request, status_code=404, what=f"report {output_id}")
+        name = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{row['tool']}-{row['target']}").strip("_")
+        return StreamingResponse(
+            toolrun.decompress_chunks(row["content"]),
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": (
+                f'attachment; filename="{name[:120]}.{_REPORT_EXTENSIONS.get(row["tool"], "json")}"'
+            )},
+        )
 
     def settings_page(request: Request, form: dict, status_code: int = 200, **ctx) -> HTMLResponse:
         return page("settings.html", request, status_code=status_code, form=form,

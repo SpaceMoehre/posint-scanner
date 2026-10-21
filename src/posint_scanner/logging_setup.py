@@ -4,13 +4,20 @@ behind a log aggregator, so no structured/JSON logging by default."""
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
+
+# --log-file rotates instead of growing without bound.
+LOG_FILE_MAX_BYTES = 10 * 1024 * 1024
+LOG_FILE_BACKUPS = 3
 
 
 def setup_logging(verbose: bool = False, log_file: str | None = None) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     handlers: list[logging.Handler] = [logging.StreamHandler()]
     if log_file:
-        handlers.append(logging.FileHandler(log_file))
+        handlers.append(
+            RotatingFileHandler(log_file, maxBytes=LOG_FILE_MAX_BYTES, backupCount=LOG_FILE_BACKUPS)
+        )
 
     logging.basicConfig(
         level=level,

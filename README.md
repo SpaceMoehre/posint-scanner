@@ -35,10 +35,25 @@ uv run posint-scanner export --format json --output results.json
 uv run posint-scanner query --host api.example.com
 ```
 
-`scan` automatically writes an Obsidian markdown report to `./vault` when it
-finishes (see **Export structure** below) - pass `--report-output <dir>` to
-change where, or `--no-report` to skip it. `export --format obsidian` still
-works standalone if you want to re-export without rescanning.
+A scan writes only to the database. Reports are produced on demand with
+`export` (`--format obsidian | json | csv`, see **Export structure** below) or
+the web UI's export zip.
+
+External tools (nikto, trivy, theHarvester, ...) run in private workspaces
+under `<db dir>/.posint-scratch/` that are deleted as soon as each tool
+exits; a run's raw report is stored lzma-compressed in the `tool_outputs`
+table (latest per domain, tool and target - a rescan replaces it, a run that
+finds nothing removes it) and is downloadable from the domain page. Each tool
+runs in its own process group, killed on timeout. Leftovers of a killed
+process are swept on the next scan or server start.
+
+trivy and wpscan scan against downloaded vulnerability DBs that a scan never
+updates. Fetch or refresh them (into `<db dir>/.posint-cache/`, or
+`$POSINT_CACHE_DIR`) with:
+
+```
+uv run posint-scanner update-dbs
+```
 
 Qualys VMDR active scan-triggering is disabled by default; pass
 `--authorize-scans` to `scan` to enable it. Only do this against
@@ -78,13 +93,14 @@ gathered so far.
 
 The dashboard can **delete** a domain with everything scanned for it (IPs
 another domain still resolves to are kept; refused while a scan runs), and
-**download everything** as one zip: `results.json`, `services.csv`, the
-Obsidian vault and a copy of the SQLite database.
+**download everything** (or the selected domains) as one zip: `results.json`,
+`services.csv`, the Obsidian vault and a copy of the SQLite database (which
+carries the raw tool reports).
 
 ```
 pip install -e '.[web]'                  # optional web extra (FastAPI/uvicorn/jinja2)
 posint-scanner serve                     # http://127.0.0.1:8000
-posint-scanner serve --db posint.db --report-output ./vault --host 127.0.0.1 --port 8000
+posint-scanner serve --db posint.db --host 127.0.0.1 --port 8000
 ```
 
 Binds to localhost by default: the UI can start active scans, so only expose
@@ -114,8 +130,9 @@ through it) without saving or activating it.
 docker compose up --build                # http://127.0.0.1:8000
 ```
 
-The SQLite DB, generated vault, and an optional `config.yaml` persist in
-`./data` (mounted at `/data`). API keys can go in `./data/config.yaml` or be
+The SQLite DB and an optional `config.yaml` persist in `./data` (mounted at
+`/data`). The trivy/wpscan DBs are downloaded into the image at build time;
+rebuild to refresh them. API keys can go in `./data/config.yaml` or be
 passed as `OSINT_*` env vars (uncomment `env_file` in `docker-compose.yml`).
 The compose port is pinned to `127.0.0.1:8000` for the same reason as above.
 
@@ -273,8 +290,10 @@ own infrastructure - no credentials needed:
   `cloudscan.images`, and names guessed as `<org>/<label>` /
   `ghcr.io/<org>/<label>` for each org in `cloudscan.guess_image_orgs`.
 
-Needs the `trivy` and/or `checkov` binaries. Bounded by `cloudscan.max_repos` /
-`max_images` and `clone_timeout_seconds`.
+Needs the `trivy` and/or `checkov` binaries (and `update-dbs` for trivy).
+Repos are cloned one at a time and each clone is deleted once scanned; a clone
+growing past `cloudscan.max_clone_mb` (default 500) is killed and skipped.
+Bounded by `cloudscan.max_repos` / `max_images` and `clone_timeout_seconds`.
 
 ### `--cloud-audit` - cloud account auditing (authenticated)
 

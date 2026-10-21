@@ -168,5 +168,6 @@ cloudscan:
   # prowler_extra_args: []    # e.g. ["--compliance", "cis_2.0_aws"]
   # scoutsuite_extra_args: []
   # clone_timeout_seconds: 180
+  # max_clone_mb: 500         # a clone growing past this on disk is killed and skipped
   # max_repos: 25
   # max_images: 25

@@ -48,8 +48,6 @@ class TestScanCommand:
                     str(db_path),
                     "--config",
                     str(config_path),
-                    "--report-output",
-                    str(tmp_path / "vault"),
                 ],
             )
         assert result.exit_code == 0, result.output
@@ -58,41 +56,22 @@ class TestScanCommand:
         assert query_result.exit_code == 0
         assert "api.example.com" in query_result.output
 
-    def test_scan_exports_markdown_report_with_report_flag(self, tmp_path):
+    def test_scan_writes_only_the_database(self, tmp_path):
         db_path = tmp_path / "test.db"
-        report_dir = tmp_path / "vault"
 
         with patch("posint_scanner.cli.build_sources", return_value=[FakeDiscoverySource()]):
-            result = runner.invoke(
-                app,
-                ["scan", "example.com", "--db", str(db_path), "--report-output", str(report_dir), "--report"],
-            )
+            result = runner.invoke(app, ["scan", "example.com", "--db", str(db_path)])
 
         assert result.exit_code == 0, result.output
-        assert "markdown report exported" in result.output
-        assert (report_dir / "Domains" / "example.com.md").exists()
-        assert (report_dir / "Hosts" / "api.example.com.md").exists()
+        leftovers = {p.name for p in tmp_path.iterdir()} - {"test.db", "test.db-wal", "test.db-shm"}
+        assert leftovers == set()
 
-    def test_scan_skips_export_by_default(self, tmp_path):
-        db_path = tmp_path / "test.db"
-        report_dir = tmp_path / "vault"
-
-        with patch("posint_scanner.cli.build_sources", return_value=[FakeDiscoverySource()]):
-            result = runner.invoke(
-                app,
-                [
-                    "scan",
-                    "example.com",
-                    "--db",
-                    str(db_path),
-                    "--report-output",
-                    str(report_dir),
-                ],
-            )
-
+    def test_update_dbs_skips_missing_tools(self, tmp_path):
+        with patch("posint_scanner.cli.shutil.which", return_value=None):
+            result = runner.invoke(app, ["update-dbs", "--db", str(tmp_path / "test.db")])
         assert result.exit_code == 0, result.output
-        assert "markdown report exported" not in result.output
-        assert not report_dir.exists()
+        assert "trivy: not on PATH - skipped" in result.output
+        assert "wpscan: not on PATH - skipped" in result.output
 
     def test_no_netblock_sweep_flag_disables_sweep(self, tmp_path):
         db_path = tmp_path / "test.db"

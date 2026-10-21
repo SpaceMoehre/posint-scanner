@@ -176,6 +176,26 @@
 </table>
 {% endif %}
 
+{% if d.tool_outputs %}
+<h2>Raw reports ({{ d.tool_outputs|length }})</h2>
+<p class="note">Each tool's latest report as it wrote it, stored compressed in the database. A rescan replaces it; a run that finds nothing removes it.</p>
+<table class="dt">
+  <thead><tr><th data-filter="select">Tool</th><th>Target</th><th>Size</th><th>Stored</th><th>Created</th><th data-filter="none"></th></tr></thead>
+  <tbody>
+  {% for o in d.tool_outputs %}
+  <tr>
+    <td>{{ o.tool }}</td>
+    <td><code>{{ o.target }}</code></td>
+    <td class="muted">{{ o.raw_size | filesizeformat }}</td>
+    <td class="muted">{{ o.size | filesizeformat }}</td>
+    <td class="muted">{{ o.created_at[:16] }}</td>
+    <td><a href="/reports/{{ o.id }}">download</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 {% if d.results %}
 <h2>Domain data</h2>
 {% for r in d.results %}

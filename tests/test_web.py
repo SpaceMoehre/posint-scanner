@@ -31,8 +31,7 @@ def seeded_db(tmp_path):
 
 @pytest.fixture
 def client(seeded_db, tmp_path):
-    app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                     vault_dir=str(tmp_path / "vault"))
+    app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
     return TestClient(app)
 
 
@@ -63,8 +62,7 @@ class TestReadPages:
             ip_id = db.upsert_ip("198.51.100.7")
             db.upsert_resolution(hostname_id, ip_id)
             db.upsert_service(ip_id, 3306, "tcp", "MySQL")
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         c = TestClient(app)
 
         r = c.get("/overview")
@@ -95,8 +93,7 @@ class TestReadPages:
         with Database(seeded_db) as db:
             domain_id = db.get_domain_by_name("dns-net.de")["id"]
             db.upsert_hostname(domain_id, "gone.dns-net.de")
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/hosts/gone.dns-net.de")
         assert r.status_code == 200
         assert "No resolved IP addresses" in r.text
@@ -108,8 +105,7 @@ class TestReadPages:
             db.insert_result("qualys_ssllabs", "hostname", h_id, {
                 "endpoints": [{"ipAddress": "212.86.33.249", "grade": "B"},
                               {"ipAddress": "10.0.0.1", "grade": "A"}]})
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/ips/212.86.33.249")
         assert 'id="host-diamant-db.dns-net.de"' in r.text
         assert "crtsh" in r.text and '"issuer": "R11"' in r.text
@@ -141,8 +137,7 @@ class TestReadPages:
         with Database(seeded_db) as db:
             domain_id = db.get_domain_by_name("dns-net.de")["id"]
             db.insert_result("rdap", "domain", domain_id, {"registrar": "Example Registrar"})
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "rdap" in r.text
         assert "Example Registrar" in r.text
@@ -152,8 +147,7 @@ class TestReadPages:
             domain_id = db.get_domain_by_name("dns-net.de")["id"]
             db.upsert_cloud_asset(domain_id, "s3", "dnsnet-backups",
                                   "https://dnsnet-backups.s3.amazonaws.com/", "public", "bucketsearch")
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "dnsnet-backups" in r.text
         assert "public" in r.text
@@ -164,8 +158,7 @@ class TestReadPages:
             db.upsert_email_address(domain_id, "jane@dns-net.de", "hunter", name="Jane Doe",
                                     position="CTO", confidence=94, url="https://dns-net.de/team")
             db.upsert_email_address(domain_id, "jane@dns-net.de", "theharvester")
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "Email addresses (1)" in r.text
         assert 'href="https://dns-net.de/team"' in r.text
@@ -182,8 +175,7 @@ class TestReadPages:
                               "resource": "lodash 4.17.11", "target": "acme/api:latest",
                               "cves": ["CVE-2021-23337"], "reference": None, "location": None}],
             })
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "Cloud &amp; IaC findings" in r.text
         assert "CVE-2021-23337" in r.text
@@ -197,8 +189,7 @@ class TestReadPages:
                                "detail": "unauthenticated Docker Engine API"}],
                 "images": [],
             })
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/ips/212.86.33.249")
         assert "Container / orchestration exposure" in r.text
         assert "docker-api" in r.text
@@ -211,8 +202,7 @@ class TestReadPages:
                 "id": "600123", "title": "Vulnerable to Shellshock", "resource": "/cgi-bin/",
                 "url": "http://x/", "target": "http://x/", "cves": ["CVE-2014-6271"],
                 "reference": None, "location": "GET /cgi-bin/"})
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/ips/212.86.33.249")
         assert "Web app scan findings" in r.text
         assert "Vulnerable to Shellshock" in r.text
@@ -227,8 +217,7 @@ class TestReadPages:
                 "resource": "diamant-db.dns-net.de", "url": "diamant-db.dns-net.de",
                 "target": "diamant-db.dns-net.de", "cves": [], "reference": None,
                 "location": "example.github.io"})
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "Subdomain takeover" in r.text
         assert "diamant-db.dns-net.de" in r.text
@@ -238,8 +227,7 @@ class TestReadPages:
         with Database(seeded_db) as db:
             domain_id = db.get_domain_by_name("dns-net.de")["id"]
             db.upsert_candidate_domain(domain_id, "brand.co.uk", "virustotal", "212.86.33.249")
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "brand.co.uk" in r.text
         assert "virustotal" in r.text
@@ -258,8 +246,7 @@ class TestReadPages:
 class TestEmptyDb:
     def test_pages_render_before_any_scan(self, tmp_path):
         app = create_app(db_path=str(tmp_path / "empty.db"),
-                         config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+                         config_path=str(tmp_path / "none.yaml"))
         c = TestClient(app)
         assert c.get("/").status_code == 200
         r = c.get("/overview")
@@ -279,8 +266,7 @@ class TestScanLaunch:
 
     def test_post_scan_starts_job_and_completes(self, tmp_path):
         app = create_app(db_path=str(tmp_path / "s.db"),
-                         config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+                         config_path=str(tmp_path / "none.yaml"))
         client = TestClient(app)
         with (
             patch("posint_scanner.web.scans.run_scan") as mock_run,
@@ -295,8 +281,7 @@ class TestScanLaunch:
 
     def test_scan_options_reflect_checkboxes(self, tmp_path):
         app = create_app(db_path=str(tmp_path / "s.db"),
-                         config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+                         config_path=str(tmp_path / "none.yaml"))
         client = TestClient(app)
         with (
             patch("posint_scanner.web.scans.run_scan") as mock_run,
@@ -316,8 +301,7 @@ class TestScanLaunch:
     def _post(self, tmp_path, data, config_text=""):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_text)
-        app = create_app(db_path=str(tmp_path / "s.db"), config_path=str(config_path),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=str(tmp_path / "s.db"), config_path=str(config_path))
         client = TestClient(app)
         with (
             patch("posint_scanner.web.scans.run_scan") as mock_run,
@@ -374,8 +358,7 @@ class TestScanLaunch:
 
     def test_failed_scan_surfaces_error(self, tmp_path):
         app = create_app(db_path=str(tmp_path / "s.db"),
-                         config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+                         config_path=str(tmp_path / "none.yaml"))
         client = TestClient(app)
         with (
             patch("posint_scanner.web.scans.run_scan", side_effect=RuntimeError("boom")),
@@ -392,8 +375,7 @@ class TestScanLaunch:
 class TestScanProgressAndCancel:
     def _app(self, tmp_path):
         return create_app(db_path=str(tmp_path / "s.db"),
-                          config_path=str(tmp_path / "none.yaml"),
-                          vault_dir=str(tmp_path / "vault"))
+                          config_path=str(tmp_path / "none.yaml"))
 
     def _wait_status(self, client, job_id, wanted, timeout=5.0):
         deadline = time.time() + timeout
@@ -449,8 +431,7 @@ class TestScanProgressAndCancel:
                 path="app/.env", commit="a" * 40,
                 url="https://github.com/acme/app/blob/" + "a" * 40 + "/app/.env#L4", line=4,
                 rule="aws_access_key_id", secret="AKIASECRETVALUE12345")
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "GitHub exposures" in r.text
         assert "acme/app" in r.text
@@ -464,8 +445,7 @@ class TestScanProgressAndCancel:
                 domain_id, kind="reference", target="212.86.33.249", repo="acme/ops",
                 path="hosts.yml", commit="c" * 40,
                 url="https://github.com/acme/ops/blob/" + "c" * 40 + "/hosts.yml#L9", line=9)
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/ips/212.86.33.249")
         assert "GitHub exposures" in r.text
         assert "acme/ops" in r.text
@@ -515,6 +495,30 @@ class TestDeleteAndExport:
             f"vault/Domains/{every[0]}.md"]
 
 
+class TestRawReports:
+    def test_listed_on_domain_page_and_downloadable(self, seeded_db, client):
+        from posint_scanner import toolrun
+
+        report = b'{"vulnerabilities": [{"id": "x"}]}' * 1000
+        with Database(seeded_db) as db:
+            domain_id = db.get_domain_by_name("dns-net.de")["id"]
+            db.save_tool_output(domain_id, "nikto", "https://a:443/",
+                                toolrun.compress_text(report.decode()))
+            (row,) = db.list_tool_outputs(domain_id)
+
+        page = client.get("/domains/dns-net.de")
+        assert "Raw reports (1)" in page.text
+        assert f'href="/reports/{row["id"]}"' in page.text
+
+        r = client.get(f"/reports/{row['id']}")
+        assert r.status_code == 200
+        assert r.content == report
+        assert 'filename="nikto-https_a_443.json"' in r.headers["content-disposition"]
+
+    def test_unknown_report_is_404(self, client):
+        assert client.get("/reports/999").status_code == 404
+
+
 class TestWebLinks:
     def test_web_url_detection(self):
         from posint_scanner.web.views import web_url
@@ -539,8 +543,7 @@ class TestWebLinks:
     def test_ip_page_links_web_service(self, seeded_db, tmp_path):
         with Database(seeded_db) as db:
             db.upsert_service(db.get_ip_by_address("212.86.33.249")["id"], 443, "tcp", None)
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/ips/212.86.33.249")
         assert 'href="https://212.86.33.249/"' in r.text
 
@@ -556,8 +559,7 @@ class TestLookalikePage:
                     {"name": "dsn-net.de", "addresses": [], "mx": ["0 mail.evil."]},
                 ],
             })
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "Registered look-alike domains (2)" in r.text
         assert "dns-net.co" in r.text
@@ -578,8 +580,7 @@ class TestExploitColumn:
                                   "url": "https://www.exploit-db.com/exploits/42315"}],
                 }],
             })
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/ips/212.86.33.249")
         assert "https://www.exploit-db.com/exploits/42315" in r.text
         assert "EDB-42315" in r.text
@@ -594,8 +595,7 @@ class TestOriginIpPage:
                 "frontend_ips": ["104.16.5.5"],
                 "origin_candidates": [{"ip": "203.0.113.10", "via": ["mx:mail.dns-net.de"]}],
             })
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "Possible origin IPs behind cloudflare (1)" in r.text
         assert "203.0.113.10" in r.text
@@ -608,8 +608,7 @@ class TestOriginIpPage:
                 "behind_cdn": False, "cdn": None,
                 "frontend_ips": ["203.0.113.5"], "origin_candidates": [],
             })
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/domains/dns-net.de")
         assert "Possible origin IPs" not in r.text
 
@@ -627,8 +626,7 @@ class TestNucleiPage:
                 "severity": "critical", "matched_at": "http://212.86.33.249:8080/geoserver/ows",
                 "type": "http", "cves": ["CVE-2024-36401"], "cvss_score": 9.8,
                 "tags": ["rce"], "reference": []})
-        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"),
-                         vault_dir=str(tmp_path / "vault"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
         r = TestClient(app).get("/ips/212.86.33.249")
         assert "Nuclei findings (2)" in r.text
         assert "CVE-2024-36401" in r.text

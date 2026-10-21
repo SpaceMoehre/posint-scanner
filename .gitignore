@@ -18,3 +18,7 @@ config.yaml
 # Scan output directories (results, DBs, generated vaults)
 /dns-net-scan/
 /data/
+
+# Tool scratch dirs and downloaded tool DBs (next to the DB; see toolrun.py)
+.posint-scratch/
+.posint-cache/

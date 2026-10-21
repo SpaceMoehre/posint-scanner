@@ -123,6 +123,14 @@ RUN if [ "$INSTALL_WEBSCAN" = "true" ]; then set -eux; \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
+# Vulnerability DBs trivy and wpscan scan with, downloaded once here into a
+# read-only cache: scans never update them (nor write anything else outside
+# the database). Refresh by rebuilding the image. A failed download only
+# warns - those two stages then skip until the DBs are present.
+ENV POSINT_CACHE_DIR=/opt/posint-cache
+RUN posint-scanner update-dbs \
+    || echo "warning: tool DB download failed - trivy/wpscan stages will be skipped"
+
 # theHarvester for the `theharvester` email/host collection source (skipped
 # gracefully at runtime when absent). It needs Python >= 3.14, newer than this
 # image's, so uv installs it as an isolated tool with its own managed Python.
@@ -136,8 +144,9 @@ RUN if [ "$INSTALL_THEHARVESTER" = "true" ]; then set -eux; \
       pip uninstall -y uv; \
     fi
 
-# All mutable state (SQLite DB, generated vault, optional config.yaml) lives
-# here so it can be a mounted volume that survives image rebuilds.
+# All mutable state (SQLite DB, optional config.yaml) lives here so it can be
+# a mounted volume that survives image rebuilds. Tools work in
+# /data/.posint-scratch, which is emptied after every run.
 RUN mkdir -p /data
 VOLUME ["/data"]
 
@@ -149,6 +158,5 @@ EXPOSE 8000
 CMD ["posint-scanner", "serve", \
      "--db", "/data/posint.db", \
      "--config", "/data/config.yaml", \
-     "--report-output", "/data/vault", \
      "--host", "0.0.0.0", \
      "--port", "8000"]

@@ -6,8 +6,8 @@
 #   ./launch.sh export --format json --output results.json
 #
 # With no arguments: interactive mode - prompts for a domain (or a
-# domains file). `scan` already auto-exports an Obsidian markdown report,
-# so this just offers an additional json/csv export on top of that.
+# domains file), scans it (results go only into the database), then offers
+# an Obsidian/json/csv export.
 #
 # Either way it handles first-run setup: installs dependencies, creates
 # config.yaml from the example if missing, and initializes the database.
@@ -53,16 +53,20 @@ if [ -z "$target" ]; then
 fi
 
 if [ -f "$target" ]; then
-    uv run posint-scanner scan --domains-file "$target" --db "$DB_PATH" --report-output "$VAULT_PATH"
+    uv run posint-scanner scan --domains-file "$target" --db "$DB_PATH"
 else
-    uv run posint-scanner scan "$target" --db "$DB_PATH" --report-output "$VAULT_PATH"
+    uv run posint-scanner scan "$target" --db "$DB_PATH"
 fi
 
 echo
-read -rp "Also export as json/csv? [json/csv/skip] (default: skip): " fmt
+read -rp "Export the results? [obsidian/json/csv/skip] (default: skip): " fmt
 fmt="${fmt:-skip}"
 
 case "$fmt" in
+    obsidian)
+        uv run posint-scanner export --format obsidian --output "$VAULT_PATH" --db "$DB_PATH"
+        echo "exported to $VAULT_PATH"
+        ;;
     json)
         uv run posint-scanner export --format json --output results.json --db "$DB_PATH"
         echo "exported to results.json"

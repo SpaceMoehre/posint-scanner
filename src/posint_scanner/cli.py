@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import ipaddress
+import shutil
 from pathlib import Path
 from typing import Optional
 
 import typer
 
+from posint_scanner import toolrun
 from posint_scanner.config import load_config
 from posint_scanner.db import Database
 from posint_scanner.export.csv_export import write_csv
@@ -45,6 +47,56 @@ def db_init(
     with Database(db_path) as db:
         db.init_schema()
     typer.echo(f"initialized database at {db_path}")
+
+
+# Commands that fill the read-only tool cache (see toolrun.py): what each
+# tool needs to scan without downloading anything mid-scan.
+_DB_UPDATES = {
+    "trivy": [
+        ["image", "--download-db-only"],
+        ["image", "--download-java-db-only"],
+    ],
+    "wpscan": [["--update", "--no-banner"]],
+}
+DB_UPDATE_TIMEOUT_SECONDS = 1800
+
+
+@app.command("update-dbs")
+def update_dbs(
+    db_path: str = typer.Option(
+        DEFAULT_DB_PATH, "--db", help="Database whose data dir holds the cache."
+    ),
+) -> None:
+    """Download or refresh the vulnerability databases trivy and wpscan scan
+    with, into <db dir>/.posint-cache (or $POSINT_CACHE_DIR). Scans only read
+    them, so run this before the first scan and whenever they should be
+    refreshed."""
+    toolrun.configure(db_path)
+    failed = False
+    for tool, runs in _DB_UPDATES.items():
+        binary = shutil.which(tool)
+        if binary is None:
+            typer.echo(f"{tool}: not on PATH - skipped")
+            continue
+        cache = toolrun.cache_dir(tool)
+        cache.mkdir(parents=True, exist_ok=True)
+        for args in runs:
+            if tool == "trivy":
+                args = [*args, "--cache-dir", str(cache)]
+            with toolrun.workspace(f"update-{tool}") as workspace:
+                result = toolrun.run_tool(
+                    [binary, *args], timeout=DB_UPDATE_TIMEOUT_SECONDS, cwd=workspace,
+                    # wpscan keeps its DB under HOME.
+                    env={"HOME": str(cache)} if tool == "wpscan" else None,
+                )
+            if result is None or result.returncode != 0:
+                failed = True
+                detail = result.stderr.strip()[-300:] if result else "did not finish"
+                typer.echo(f"{tool} {' '.join(args)}: failed: {detail}", err=True)
+        typer.echo(f"{tool}: database in {cache}")
+    toolrun.release()
+    if failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -144,14 +196,6 @@ def scan(
         4,
         "--max-concurrent-domains",
         help="How many domains to process concurrently when scanning a --domains-file batch.",
-    ),
-    report_output: str = typer.Option(
-        "./vault",
-        "--report-output",
-        help="Where to write the Obsidian markdown report (only if --report is given).",
-    ),
-    report: bool = typer.Option(
-        False, "--report", help="Generate the Obsidian markdown report after the scan (off by default)."
     ),
     ping: Optional[bool] = typer.Option(
         None,
@@ -327,12 +371,8 @@ def scan(
             max_concurrent_domains=max_concurrent_domains,
             fresh=fresh,
         )
-        if report:
-            export_obsidian(db, Path(report_output))
 
     typer.echo(f"scan complete, results in {db_path}")
-    if report:
-        typer.echo(f"markdown report exported to {report_output}")
 
 
 @app.command(name="export")
@@ -364,9 +404,6 @@ def export_command(
 def serve(
     db_path: str = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
     config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config", help="Path to config.yaml."),
-    report_output: str = typer.Option(
-        "./vault", "--report-output", help="Vault directory the web UI regenerates after a scan."
-    ),
     host: str = typer.Option(
         "127.0.0.1",
         "--host",
@@ -394,7 +431,7 @@ def serve(
         )
         raise typer.Exit(code=1)
 
-    application = create_app(db_path=db_path, config_path=config_path, vault_dir=report_output)
+    application = create_app(db_path=db_path, config_path=config_path)
     typer.echo(f"posint-scanner UI on http://{host}:{port}  (db: {db_path})")
     uvicorn.run(application, host=host, port=port)
 
