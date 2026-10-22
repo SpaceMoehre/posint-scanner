@@ -142,6 +142,27 @@ class TestReadPages:
         assert "rdap" in r.text
         assert "Example Registrar" in r.text
 
+    def test_domain_page_shows_email_auth_findings(self, seeded_db, tmp_path):
+        with Database(seeded_db) as db:
+            domain_id = db.get_domain_by_name("dns-net.de")["id"]
+            db.insert_result("email_auth", "domain", domain_id, {
+                "spoofable": True,
+                "mx_present": True,
+                "spf": {"found": True, "record": "v=spf1 ~all", "all_qualifier": "~all",
+                        "lookup_count": 0, "findings": []},
+                "dmarc": {"found": False, "policy": None, "subdomain_policy": None,
+                          "pct": None, "rua": None, "findings": []},
+                "caa": {"found": False, "records": [], "findings": []},
+                "dkim": {"selectors_present": []},
+                "findings": [{"id": "dmarc_missing", "severity": "high",
+                              "title": "No DMARC record", "detail": "spoofable"}],
+            })
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
+        r = TestClient(app).get("/domains/dns-net.de")
+        assert "Email authentication" in r.text
+        assert "spoofable" in r.text
+        assert "No DMARC record" in r.text
+
     def test_domain_page_flags_public_cloud_bucket(self, seeded_db, tmp_path):
         with Database(seeded_db) as db:
             domain_id = db.get_domain_by_name("dns-net.de")["id"]
@@ -193,6 +214,23 @@ class TestReadPages:
         r = TestClient(app).get("/ips/212.86.33.249")
         assert "Container / orchestration exposure" in r.text
         assert "docker-api" in r.text
+
+    def test_ip_page_shows_security_header_findings(self, seeded_db, tmp_path):
+        with Database(seeded_db) as db:
+            ip_id = db.get_ip_by_address("212.86.33.249")["id"]
+            db.insert_result("webtech", "ip", ip_id, {
+                "port": 443, "url": "https://x/", "status": 200,
+                "technologies": {"nginx": "1.18.0"},
+                "security_headers": {
+                    "present": [], "missing": ["strict-transport-security"],
+                    "findings": [{"id": "missing_hsts", "severity": "medium",
+                                  "title": "No HSTS header", "detail": "downgrade risk"}],
+                },
+            })
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
+        r = TestClient(app).get("/ips/212.86.33.249")
+        assert "HTTP security headers" in r.text
+        assert "No HSTS header" in r.text
 
     def test_ip_page_shows_web_app_findings(self, seeded_db, tmp_path):
         with Database(seeded_db) as db:

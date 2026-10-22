@@ -411,6 +411,7 @@ database, never hand-edited or read back.
 | `subfinder` | passive | discovery | shells out to the `subfinder` CLI; skipped with a warning if not on `PATH` |
 | `dnsrecon` | passive | discovery + enrichment | reverse PTR lookups, AXFR zone-transfer attempts, NS/MX/TXT/SOA records |
 | `crtsh` | passive | discovery | certificate-transparency search; crt.sh is flaky, failures are retried then skipped |
+| `certspotter` | passive | discovery | Cert Spotter certificate-transparency search - a second CT feed for when crt.sh is down. Keyless at a small hourly allowance, optional `api_key` for more |
 | `wayback` | passive | discovery | hostnames from the Wayback Machine's capture index (incl. historical hosts); slow, 7-day TTL |
 | `commoncrawl` | passive | discovery | hostnames from the latest Common Crawl URL index; 7-day TTL |
 | `hackertarget` | passive | discovery + enrichment | host search; reverse IP per IP. Keyless at 50/day (shared by both), optional `api_key` for more |
@@ -426,6 +427,7 @@ database, never hand-edited or read back.
 | `bucketsearch` | active | collection | guesses cloud storage bucket names (domain label + suffixes, or names you supply) and checks S3/GCS/Azure for public exposure. Off by default; never reads bucket contents |
 | `rdap` | passive | collection | the domain's registration record: registrar, registered/expiry/last-changed dates, EPP status, nameservers, DNSSEC. Contact entities are dropped. Keyless, 7-day TTL |
 | `entra_id` | passive | collection | Microsoft Entra ID / M365 tenant: tenant ID, region, managed vs federated (+ ADFS sign-in URL), seamless SSO, branding, every domain in the same tenant (fed back as candidate domains), `.onmicrosoft.com` name, Defender for Identity, M365 DNS records. Keyless, 7-day TTL |
+| `email_auth` | passive | collection | email-spoofing posture from DNS: grades SPF (`all` qualifier, >10-lookup permerror, duplicate records), DMARC (`p=none`/missing, `sp`, `pct`, `rua`), DKIM (common selectors) and CAA. Reports whether the domain is spoofable. Keyless, 7-day TTL, DNS-only |
 | `lookalike` | passive | collection | typosquat/homoglyph permutations of the domain (à la dnstwist), resolved against public resolvers; reports the registered ones (A/AAAA or MX) as possible impersonation domains. Keyless, 7-day TTL. Off by default (hundreds of DNS lookups). Never scans the look-alikes - they aren't yours |
 | `origin_ip` | passive | collection | de-cloaks a CDN/WAF-fronted domain (à la HatCloud): detects Cloudflare/Fastly fronting, then reports non-CDN origin IPs the zone's own DNS leaks (MX, SPF `ip4:`/`a:`, direct-connect subdomains). Keyless, 7-day TTL, DNS-only. Candidate IPs kept in domain data (not auto-scanned) |
 | `rapiddns` | scrape | discovery | scrapes rapiddns.io's subdomain page (robots.txt allows it); opt-in |

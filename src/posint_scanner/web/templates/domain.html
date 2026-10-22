@@ -196,6 +196,37 @@
 </table>
 {% endif %}
 
+{% if d.email_auth %}
+{% set ea = d.email_auth %}
+<h2>Email authentication
+  {% if ea.spoofable %}<span class="badge b-HIGH">spoofable</span>{% else %}<span class="badge b-INFO">enforced</span>{% endif %}
+</h2>
+<p class="note">Whether mail can be forged from this domain. Direct From-domain spoofing is stopped by DMARC enforcement (<code>p=quarantine</code>/<code>reject</code>), not SPF alone.</p>
+<table class="dt">
+  <thead><tr><th>Record</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td>SPF</td><td>{% if ea.spf.found %}<code>{{ ea.spf.record|truncate(100) }}</code>{% else %}<span class="muted">not published</span>{% endif %}</td></tr>
+    <tr><td>DMARC</td><td>{% if ea.dmarc.found %}<code>p={{ ea.dmarc.policy or "?" }}</code>{% if ea.dmarc.subdomain_policy %} <code>sp={{ ea.dmarc.subdomain_policy }}</code>{% endif %}{% else %}<span class="muted">not published</span>{% endif %}</td></tr>
+    <tr><td>DKIM</td><td>{% if ea.dkim.selectors_present %}selectors: {{ ea.dkim.selectors_present|join(", ") }}{% else %}<span class="muted">no common selector found</span>{% endif %}</td></tr>
+    <tr><td>CAA</td><td>{% if ea.caa.found %}{{ ea.caa.records|join("; ")|truncate(100) }}{% else %}<span class="muted">any CA may issue</span>{% endif %}</td></tr>
+  </tbody>
+</table>
+{% if ea.findings %}
+<table class="dt">
+  <thead><tr><th data-filter="select">Severity</th><th>Finding</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for f in ea.findings %}
+  <tr>
+    <td data-sort="{{ f.severity }}"><span class="badge b-{{ f.severity|upper }}">{{ f.severity }}</span></td>
+    <td>{{ f.title }}</td>
+    <td class="muted">{{ f.detail }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endif %}
+
 {% if d.results %}
 <h2>Domain data</h2>
 {% for r in d.results %}

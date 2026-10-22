@@ -238,6 +238,7 @@ def build_domain(db: Database, name: str) -> dict | None:
         [],
     )
     origin = next((r["data"] for r in domain_results if r["source"] == "origin_ip"), None)
+    email_auth = next((r["data"] for r in domain_results if r["source"] == "email_auth"), None)
     # Takeover findings live on their hostname, but any that didn't map back to
     # a known hostname were persisted on the domain - include both.
     takeovers += [r["data"] for r in domain_results if r["source"] == "takeover"]
@@ -249,6 +250,7 @@ def build_domain(db: Database, name: str) -> dict | None:
         "candidates": candidates,
         "lookalikes": lookalikes,
         "origin": origin,
+        "email_auth": email_auth,
         "results": domain_results,
         "takeovers": takeovers,
         "cloud_findings": cloud_findings(domain_results),
@@ -336,6 +338,15 @@ def build_ip(db: Database, address: str) -> dict | None:
         ),
         key=lambda e: severity_rank(e.get("severity")),
     )
+    header_findings = sorted(
+        (
+            {**finding, "url": r["data"].get("url")}
+            for r in results
+            if r["source"] == "webtech"
+            for finding in (r["data"].get("security_headers") or {}).get("findings") or []
+        ),
+        key=lambda f: severity_rank(f.get("severity")),
+    )
     return {
         "address": address,
         "first_seen": row["first_seen"],
@@ -346,6 +357,7 @@ def build_ip(db: Database, address: str) -> dict | None:
         "vulns": sorted(vulns, key=lambda v: -(v.get("cvss_score") or 0)),
         "nuclei": nuclei,
         "web_findings": web_findings(results),
+        "header_findings": header_findings,
         "container_exposures": container_exposures,
         "code_exposures": [dict(r) for r in db.list_code_exposures_for_target(address)],
     }

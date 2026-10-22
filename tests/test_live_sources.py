@@ -17,6 +17,7 @@ pytestmark = pytest.mark.live
 DOMAIN = "iana.org"  # stable, public, has several long-lived subdomains
 HTTP_DISCOVERY = [
     "crtsh",
+    "certspotter",
     "wayback",
     "commoncrawl",
     "hackertarget",

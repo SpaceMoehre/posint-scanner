@@ -6,8 +6,51 @@ from posint_scanner.sources.webtech import (
     WebTechFingerprinter,
     cpes_for,
     fingerprint,
+    grade_security_headers,
     pick_server_product,
 )
+
+
+class TestGradeSecurityHeaders:
+    def _ids(self, result):
+        return {f["id"] for f in result["findings"]}
+
+    def test_https_without_hsts_is_flagged(self):
+        result = grade_security_headers({}, is_https=True)
+        assert "missing_hsts" in self._ids(result)
+
+    def test_http_does_not_flag_hsts(self):
+        # HSTS is meaningless over plain HTTP.
+        result = grade_security_headers({}, is_https=False)
+        assert "missing_hsts" not in self._ids(result)
+
+    def test_missing_common_headers_flagged(self):
+        result = grade_security_headers({}, is_https=True)
+        ids = self._ids(result)
+        assert {"missing_csp", "missing_x_content_type_options", "missing_x_frame_options"} <= ids
+
+    def test_present_headers_not_flagged(self):
+        headers = {
+            "strict-transport-security": "max-age=31536000",
+            "content-security-policy": "default-src 'self'",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY",
+            "referrer-policy": "no-referrer",
+            "permissions-policy": "geolocation=()",
+        }
+        result = grade_security_headers(headers, is_https=True)
+        assert result["findings"] == []
+        assert set(result["present"]) == set(headers)
+
+    def test_csp_frame_ancestors_satisfies_clickjacking(self):
+        headers = {"content-security-policy": "frame-ancestors 'none'"}
+        assert "missing_x_frame_options" not in self._ids(
+            grade_security_headers(headers, is_https=False)
+        )
+
+    def test_powered_by_is_info_disclosure(self):
+        result = grade_security_headers({"x-powered-by": "PHP/8.1.0"}, is_https=False)
+        assert "tech_disclosure" in self._ids(result)
 
 
 class TestFingerprint:

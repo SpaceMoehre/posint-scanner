@@ -39,11 +39,13 @@ from posint_scanner.sources.base import Source, SourceSettings
 from posint_scanner.sources.abuseipdb import AbuseIpDbSource
 from posint_scanner.sources.bucketsearch import BucketSearchSource
 from posint_scanner.sources.censys_source import CensysSource
+from posint_scanner.sources.certspotter import CertSpotterSource
 from posint_scanner.sources.commoncrawl import CommonCrawlSource
 from posint_scanner.sources.container_exposure import ContainerExposureSource
 from posint_scanner.sources.crtsh import CrtShSource
 from posint_scanner.sources.dnsbrute import DnsBruteSource
 from posint_scanner.sources.dnsrecon import DnsReconSource
+from posint_scanner.sources.email_auth import EmailAuthSource
 from posint_scanner.sources.entra_id import EntraIdSource
 from posint_scanner.sources.fullhunt import FullHuntSource
 from posint_scanner.sources.fullhunt_web import FullHuntWebSource
@@ -79,6 +81,7 @@ SOURCE_CLASSES: list[type[Source]] = [
     SubfinderSource,
     DnsReconSource,
     CrtShSource,
+    CertSpotterSource,
     WaybackSource,
     CommonCrawlSource,
     HackerTargetSource,
@@ -107,6 +110,7 @@ SOURCE_CLASSES: list[type[Source]] = [
     # collection (domain-level)
     RdapSource,
     EntraIdSource,
+    EmailAuthSource,
     LookalikeSource,
     OriginIpSource,
     BucketSearchSource,

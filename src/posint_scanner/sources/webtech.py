@@ -332,6 +332,47 @@ def cpes_for(name: str, version: str | None) -> list[str]:
     return [f"cpe:2.3:a:{vendor_product}:{version}:*:*:*:*:*:*:*" for vendor_product in fp.cpe]
 
 
+# Response security headers, graded when absent. HSTS is judged only over
+# HTTPS (it has no meaning on a plain-HTTP response). Clickjacking protection
+# is satisfied by either X-Frame-Options or a CSP `frame-ancestors` directive.
+def grade_security_headers(headers: dict[str, str], is_https: bool) -> dict:
+    """Which response security headers are present/missing, and findings for
+    the missing ones. `headers` keys must be lowercased. Best-effort and
+    total - it never raises."""
+    checks = ("strict-transport-security", "content-security-policy",
+              "x-content-type-options", "x-frame-options", "referrer-policy",
+              "permissions-policy")
+    present = [h for h in checks if h in headers]
+    missing = [h for h in checks if h not in headers]
+    findings: list[dict] = []
+
+    def flag(id: str, severity: str, title: str, detail: str) -> None:
+        findings.append({"id": id, "severity": severity, "title": title, "detail": detail})
+
+    if is_https and "strict-transport-security" not in headers:
+        flag("missing_hsts", "medium", "No HSTS header",
+             "Without Strict-Transport-Security a visitor can be downgraded to HTTP.")
+    if "content-security-policy" not in headers:
+        flag("missing_csp", "low", "No Content-Security-Policy",
+             "No CSP - the main defence against cross-site scripting is absent.")
+    if "x-content-type-options" not in headers:
+        flag("missing_x_content_type_options", "low", "No X-Content-Type-Options",
+             "Without `nosniff`, browsers may MIME-sniff responses.")
+    csp = headers.get("content-security-policy", "")
+    if "x-frame-options" not in headers and "frame-ancestors" not in csp.lower():
+        flag("missing_x_frame_options", "low", "No clickjacking protection",
+             "Neither X-Frame-Options nor a CSP frame-ancestors directive is set.")
+    if "referrer-policy" not in headers:
+        flag("missing_referrer_policy", "info", "No Referrer-Policy", "")
+    if "permissions-policy" not in headers:
+        flag("missing_permissions_policy", "info", "No Permissions-Policy", "")
+    if "x-powered-by" in headers:
+        flag("tech_disclosure", "info", "X-Powered-By discloses technology",
+             f"Response advertises `{headers['x-powered-by']}`.")
+
+    return {"present": present, "missing": missing, "findings": findings}
+
+
 def pick_server_product(technologies: dict[str, str | None]) -> tuple[str | None, str | None]:
     """Choose the one web-server technology to attribute to the service row
     (product, version) so the NVD stage can build a CPE and look up CVEs.
@@ -419,6 +460,9 @@ class WebTechFingerprinter:
             return {
                 "url": final_url,
                 "status": status,
+                "security_headers": grade_security_headers(
+                    headers, is_https=final_url.startswith("https://")
+                ),
                 "technologies": technologies,
                 "categories": {
                     name: list(_categories_of(name)) for name in technologies
