@@ -18,6 +18,7 @@ whole budget on 403s.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 
@@ -39,6 +40,11 @@ MAX_CVES_PER_LOOKUP = 20
 THROTTLE_RETRY_COOLDOWN_SECONDS = 15
 
 
+class NvdUnavailableError(Exception):
+    """NVD gave no usable answer (rate-limited, or throttled even after the
+    retry) - unlike an empty result, this says nothing about the CPE."""
+
+
 def cpe_version(cpe: str) -> str | None:
     """The concrete version component of a CPE, or None if it has none - i.e.
     the version field is absent, a wildcard (`*`) or N/A (`-`). Handles both
@@ -55,6 +61,71 @@ def cpe_version(cpe: str) -> str | None:
         return None
     version = version.strip()
     return version if version and version not in ("*", "-") else None
+
+
+_BOUNDS = (
+    ("versionStartIncluding", ">="),
+    ("versionStartExcluding", ">"),
+    ("versionEndIncluding", "<="),
+    ("versionEndExcluding", "<"),
+)
+
+
+def _version_key(version: str) -> tuple:
+    """Sort key for a version string: numeric runs compare as numbers, so
+    7.10 > 7.9; a trailing letter run (7.1.0-beta1) sorts before the release."""
+    key = [
+        (1, int(token)) if token.isdigit() else (0, token)
+        for token in re.findall(r"\d+|[a-z]+", version.lower())
+    ]
+    return (*key, (0.5,))
+
+
+def _in_range(version: str, match: dict) -> bool:
+    """Whether `version` satisfies every bound a cpeMatch entry states."""
+    key = _version_key(version)
+    for field, op in _BOUNDS:
+        bound = match.get(field)
+        if not bound:
+            continue
+        other = _version_key(bound)
+        if not {">=": key >= other, ">": key > other, "<=": key <= other, "<": key < other}[op]:
+            return False
+    return True
+
+
+def affected_versions(cve: dict, cpe: str) -> str | None:
+    """How the CVE says the CPE's version is affected - the matching
+    vulnerable entry's version or range, e.g. "<= 6.9.4" or ">= 6.9.0, < 6.9.5"
+    - or None when it doesn't state one that covers the version.
+
+    A `cpeName` lookup also returns CVEs that name the product only with a
+    wildcard version and no range ("every version" - typically the product
+    listed as the platform another component runs on, e.g. WordPress for a
+    plugin CVE) or only as a non-vulnerable platform. Those say nothing about
+    the version actually running, so the caller drops them."""
+    parts = cpe.lower().split(":")
+    version = cpe_version(cpe)
+    if not cpe.startswith("cpe:2.3:") or version is None:
+        return None
+    product = parts[2:5]  # part, vendor, product
+    for config in cve.get("configurations", []):
+        for node in config.get("nodes", []):
+            if node.get("negate"):
+                continue
+            for match in node.get("cpeMatch", []):
+                criteria = str(match.get("criteria", "")).lower().split(":")
+                if not match.get("vulnerable") or criteria[2:5] != product:
+                    continue
+                criteria_version = criteria[5] if len(criteria) > 5 else "*"
+                if criteria_version not in ("*", "-"):
+                    if criteria_version == version.lower():
+                        return f"= {criteria_version}"
+                    continue
+                bounds = [f"{op} {match[field]}" for field, op in _BOUNDS if match.get(field)]
+                if criteria_version == "*" and bounds and _in_range(version, match):
+                    return ", ".join(bounds)
+    return None
 
 
 def build_cpe(product: str, version: str) -> str:
@@ -115,10 +186,13 @@ class NvdClient:
         self._last_request_at = time.monotonic()
 
     def lookup_cves(self, cpe: str) -> list[dict]:
+        """CVEs that state the CPE's version as affected (see
+        affected_versions). Raises NvdUnavailableError when NVD didn't
+        answer, so a caller can keep what an earlier lookup stored."""
         with self._lock:
             data = self._request(cpe)
             if data is None:
-                return []
+                raise NvdUnavailableError(f"NVD rate-limited the lookup of {cpe}")
 
             if self._looks_throttled(data):
                 # One retry after a longer cooldown before treating it as
@@ -126,9 +200,9 @@ class NvdClient:
                 time.sleep(THROTTLE_RETRY_COOLDOWN_SECONDS)
                 data = self._request(cpe)
                 if data is None or self._looks_throttled(data):
-                    return []
+                    raise NvdUnavailableError(f"NVD throttled the lookup of {cpe}")
 
-            return self._parse_vulnerabilities(data)
+            return self._parse_vulnerabilities(data, cpe)
 
     @staticmethod
     def _looks_throttled(data: dict) -> bool:
@@ -143,17 +217,19 @@ class NvdClient:
         )
         if response.status_code == 403:
             # Rate-limited despite pacing (e.g. another process is also
-            # hitting NVD) - treat as "no data available" rather than
-            # crashing the whole scan.
+            # hitting NVD) - "no data available", not "no CVEs".
             return None
         response.raise_for_status()
         return dict(response.json())
 
     @staticmethod
-    def _parse_vulnerabilities(data: dict) -> list[dict]:
+    def _parse_vulnerabilities(data: dict, cpe: str) -> list[dict]:
         cves = []
         for vuln in data.get("vulnerabilities", []):
             cve = vuln.get("cve", {})
+            affected = affected_versions(cve, cpe)
+            if affected is None:
+                continue
             score, severity = _extract_cvss(cve.get("metrics", {}))
             cves.append(
                 {
@@ -161,6 +237,7 @@ class NvdClient:
                     "summary": _extract_summary(cve),
                     "cvss_score": score,
                     "cvss_severity": severity,
+                    "affected": affected,
                 }
             )
         cves.sort(key=lambda c: c["cvss_score"] or 0, reverse=True)

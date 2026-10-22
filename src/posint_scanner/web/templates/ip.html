@@ -104,7 +104,7 @@
 {% if ip.vulns %}
 <h2>Known vulnerabilities</h2>
 <table>
-  <tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>Port</th><th>Component</th><th>Exploit</th><th>Summary</th></tr>
+  <tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>Port</th><th>Component</th><th>Affected</th><th>Exploit</th><th>Summary</th></tr>
   {% for v in ip.vulns %}
   <tr>
     <td><a href="https://nvd.nist.gov/vuln/detail/{{ v.cve_id }}" target="_blank" rel="noopener">{{ v.cve_id }}</a></td>
@@ -112,6 +112,7 @@
     <td>{{ v.cvss_score if v.cvss_score is not none else "-" }}</td>
     <td><code>{{ v.port if v.port is not none else "-" }}</code></td>
     <td>{{ v.technology or "-" }}</td>
+    <td title="Versions the CVE lists as affected">{{ v.affected or "-" }}</td>
     <td data-values="{{ "exploit" if v.exploits else "" }}">
       {% for e in v.exploits %}<a href="{{ e.url }}" target="_blank" rel="noopener" title="{{ e.title }}">EDB-{{ e.edb_id }}</a>{% if not loop.last %} {% endif %}{% else %}-{% endfor %}
     </td>

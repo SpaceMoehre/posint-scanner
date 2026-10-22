@@ -2,7 +2,15 @@ import threading
 import time
 from unittest.mock import Mock, patch
 
-from posint_scanner.nvd import NvdClient, build_cpe, cpe_version
+import pytest
+
+from posint_scanner.nvd import (
+    NvdClient,
+    NvdUnavailableError,
+    affected_versions,
+    build_cpe,
+    cpe_version,
+)
 
 
 class TestBuildCpe:
@@ -30,10 +38,70 @@ SAMPLE_RESPONSE = {
                         {"cvssData": {"baseScore": 7.7, "baseSeverity": "HIGH"}}
                     ]
                 },
+                "configurations": [{"nodes": [{"cpeMatch": [{
+                    "vulnerable": True,
+                    "criteria": "cpe:2.3:a:f5:nginx:*:*:*:*:*:*:*:*",
+                    "versionStartIncluding": "0.6.18",
+                    "versionEndExcluding": "1.20.1",
+                }]}]}],
             }
         }
     ],
 }
+NGINX_CPE = "cpe:2.3:a:f5:nginx:1.18.0:*:*:*:*:*:*:*"
+
+
+def _config(*matches, negate=False):
+    return {"configurations": [{"nodes": [{"negate": negate, "cpeMatch": list(matches)}]}]}
+
+
+WP = "cpe:2.3:a:wordpress:wordpress:7.1.3:*:*:*:*:*:*:*"
+
+
+class TestAffectedVersions:
+    def test_range_covering_the_version_is_kept(self):
+        cve = _config({"vulnerable": True, "criteria": "cpe:2.3:a:wordpress:wordpress:*:*:*:*:*:*:*:*",
+                       "versionStartIncluding": "7.1.0", "versionEndExcluding": "7.1.4"})
+        assert affected_versions(cve, WP) == ">= 7.1.0, < 7.1.4"
+
+    def test_range_not_covering_the_version_is_dropped(self):
+        cve = _config({"vulnerable": True, "criteria": "cpe:2.3:a:wordpress:wordpress:*:*:*:*:*:*:*:*",
+                       "versionEndIncluding": "7.0.1"})
+        assert affected_versions(cve, WP) is None
+
+    def test_wildcard_without_range_is_dropped(self):
+        # "every version" - says nothing about the version running
+        cve = _config({"vulnerable": True, "criteria": "cpe:2.3:a:wordpress:wordpress:*:*:*:*:*:*:*:*"})
+        assert affected_versions(cve, WP) is None
+
+    def test_product_only_as_platform_of_a_plugin_is_dropped(self):
+        cve = _config(
+            {"vulnerable": True, "criteria": "cpe:2.3:a:acme:some_plugin:*:*:*:*:*:wordpress:*:*",
+             "versionEndExcluding": "2.0"},
+            {"vulnerable": False, "criteria": "cpe:2.3:a:wordpress:wordpress:-:*:*:*:*:*:*:*"},
+        )
+        assert affected_versions(cve, WP) is None
+
+    def test_exact_version_must_match(self):
+        exact = "cpe:2.3:a:wordpress:wordpress:{}:*:*:*:*:*:*:*"
+        assert affected_versions(_config({"vulnerable": True, "criteria": exact.format("7.1.3")}),
+                                 WP) == "= 7.1.3"
+        assert affected_versions(_config({"vulnerable": True, "criteria": exact.format("7.1.2")}),
+                                 WP) is None
+
+    def test_numeric_comparison(self):
+        cve = _config({"vulnerable": True, "criteria": "cpe:2.3:a:x:x:*:*:*:*:*:*:*:*",
+                       "versionEndExcluding": "1.10"})
+        assert affected_versions(cve, "cpe:2.3:a:x:x:1.9:*:*:*:*:*:*:*") == "< 1.10"
+        assert affected_versions(cve, "cpe:2.3:a:x:x:1.10.1:*:*:*:*:*:*:*") is None
+
+    def test_prerelease_sorts_before_release(self):
+        cve = _config({"vulnerable": True, "criteria": "cpe:2.3:a:x:x:*:*:*:*:*:*:*:*",
+                       "versionEndExcluding": "7.1"})
+        assert affected_versions(cve, "cpe:2.3:a:x:x:7.1-beta2:*:*:*:*:*:*:*") == "< 7.1"
+
+    def test_no_configurations_is_dropped(self):
+        assert affected_versions({}, WP) is None
 
 
 class TestNvdClientLookupCves:
@@ -44,7 +112,7 @@ class TestNvdClientLookupCves:
         response.raise_for_status = Mock()
         with patch("requests.get", return_value=response):
             with patch("time.sleep"):
-                result = client.lookup_cves("cpe:2.3:a:nginx:nginx:1.18.0:*:*:*:*:*:*:*")
+                result = client.lookup_cves(NGINX_CPE)
 
         assert result == [
             {
@@ -52,8 +120,23 @@ class TestNvdClientLookupCves:
                 "summary": "A security issue in nginx resolver.",
                 "cvss_score": 7.7,
                 "cvss_severity": "HIGH",
+                "affected": ">= 0.6.18, < 1.20.1",
             }
         ]
+
+    def test_cves_not_stating_the_version_are_dropped(self):
+        client = NvdClient()
+        unbounded = {"cve": {"id": "CVE-2000-0001", "descriptions": [], "metrics": {},
+                             **_config({"vulnerable": True,
+                                        "criteria": "cpe:2.3:a:f5:nginx:*:*:*:*:*:*:*:*"})}}
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "totalResults": 2, "vulnerabilities": [*SAMPLE_RESPONSE["vulnerabilities"], unbounded],
+        }
+        response.raise_for_status = Mock()
+        with patch("requests.get", return_value=response), patch("time.sleep"):
+            result = client.lookup_cves(NGINX_CPE)
+        assert [c["cve_id"] for c in result] == ["CVE-2021-23017"]
 
     def test_falls_back_through_cvss_versions(self):
         client = NvdClient()
@@ -65,6 +148,7 @@ class TestNvdClientLookupCves:
                         "id": "CVE-2009-1390",
                         "descriptions": [{"lang": "en", "value": "old CVE"}],
                         "metrics": {"cvssMetricV2": [{"cvssData": {"baseScore": 6.8, "baseSeverity": "MEDIUM"}}]},
+                        **_config({"vulnerable": True, "criteria": "cpe:2.3:a:x:x:1.0:*:*:*:*:*:*:*"}),
                     }
                 }
             ]
@@ -85,15 +169,15 @@ class TestNvdClientLookupCves:
                 result = client.lookup_cves("cpe:2.3:a:x:x:1.0:*:*:*:*:*:*:*")
         assert result == []
 
-    def test_returns_empty_on_403_rather_than_raising(self):
-        # NVD signals rate-limiting via 403, not 429 - treat it as "no data"
-        # rather than crashing the whole scan.
+    def test_403_raises_unavailable(self):
+        # NVD signals rate-limiting via 403, not 429 - "no data", which must
+        # not read as "no CVEs".
         client = NvdClient()
         response = Mock(status_code=403)
         with patch("requests.get", return_value=response):
             with patch("time.sleep"):
-                result = client.lookup_cves("cpe:2.3:a:x:x:1.0:*:*:*:*:*:*:*")
-        assert result == []
+                with pytest.raises(NvdUnavailableError):
+                    client.lookup_cves("cpe:2.3:a:x:x:1.0:*:*:*:*:*:*:*")
 
     def test_sends_api_key_header_when_configured(self):
         client = NvdClient(api_key="mykey")
@@ -113,6 +197,7 @@ class TestNvdClientLookupCves:
                     "id": f"CVE-2020-{i:04d}",
                     "descriptions": [],
                     "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": float(i % 10), "baseSeverity": "LOW"}}]},
+                    **_config({"vulnerable": True, "criteria": "cpe:2.3:a:x:x:1.0:*:*:*:*:*:*:*"}),
                 }
             }
             for i in range(50)
@@ -123,7 +208,7 @@ class TestNvdClientLookupCves:
         with patch("requests.get", return_value=response):
             with patch("time.sleep"):
                 result = client.lookup_cves("cpe:2.3:a:x:x:1.0:*:*:*:*:*:*:*")
-        assert len(result) <= 20
+        assert len(result) == 20
 
     def test_retries_once_on_soft_throttle_then_succeeds(self):
         # NVD sometimes returns HTTP 200 with resultsPerPage: 0 and an empty
@@ -139,7 +224,7 @@ class TestNvdClientLookupCves:
 
         with patch("requests.get", side_effect=[throttled, recovered]):
             with patch("time.sleep") as mock_sleep:
-                result = client.lookup_cves("cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*")
+                result = client.lookup_cves(NGINX_CPE)
 
         assert len(result) == 1
         assert result[0]["cve_id"] == "CVE-2021-23017"
@@ -153,9 +238,8 @@ class TestNvdClientLookupCves:
 
         with patch("requests.get", return_value=throttled):
             with patch("time.sleep"):
-                result = client.lookup_cves("cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*")
-
-        assert result == []
+                with pytest.raises(NvdUnavailableError):
+                    client.lookup_cves("cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*")
 
     def test_genuine_zero_results_is_not_treated_as_throttled(self):
         client = NvdClient()

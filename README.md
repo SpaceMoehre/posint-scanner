@@ -246,6 +246,14 @@ NVD's data even when vulnerabilities exist, so treat this as best-effort
 enrichment on top of whatever versions were detected, not a complete
 vulnerability database. Disable with `--no-vuln-lookup`.
 
+Only CVEs that state the detected version as affected are kept: NVD's CPE
+match also returns CVEs that list the product with no version or range
+("all versions") or only as the platform another component runs on (e.g.
+WordPress for every WordPress plugin CVE), which say nothing about the
+version running. The affected version/range is shown in the IP page's
+Affected column. Each scan replaces an IP's stored CVEs, unless NVD didn't
+answer (rate limit), in which case the earlier ones stay.
+
 If `searchsploit` (the offline [Exploit-DB](https://gitlab.com/exploit-database/exploitdb)
 CLI) is on `PATH`, each found CVE is also checked against the local
 Exploit-DB copy and annotated with any published exploits (title + EDB

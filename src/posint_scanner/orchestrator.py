@@ -42,7 +42,7 @@ from posint_scanner.governor import SourceGovernor
 from posint_scanner.models import DiscoveredHostname, EnrichmentResult, Report
 from posint_scanner.normalize import InvalidDomainError, dedup_domains, normalize_domain
 from posint_scanner.nuclei import NucleiScanner
-from posint_scanner.nvd import NvdClient, build_cpe, cpe_version
+from posint_scanner.nvd import NvdClient, NvdUnavailableError, build_cpe, cpe_version
 from posint_scanner.webscan import (
     NiktoScanner,
     Php2ShellScanner,
@@ -983,16 +983,15 @@ def _php_cpe_checks(
     return checks
 
 
-def _purge_versionless_nvd(db: Database, ip_id: int) -> None:
-    """Drop CVE rows stored for a CPE without a concrete version (e.g. by an
-    older scan): they list every CVE ever filed for the product."""
+def _replace_nvd_results(db: Database, ip_id: int, rows: list[tuple[int, dict]]) -> None:
+    """Swap the IP's stored CVE results for this lookup's: an earlier scan's
+    rows may be for a version no longer running, or (from older versions of
+    the lookup) for CVEs that don't state an affected version at all."""
     for row in db.list_results_for_target("ip", ip_id):
-        if row["source"] != "nvd":
-            continue
-        cpe = json.loads(row["data"]).get("cpe")
-        cpes = cpe if isinstance(cpe, list) else [cpe]
-        if cpes and all(not c or cpe_version(c) is None for c in cpes):
+        if row["source"] == "nvd":
             db.delete_result(row["id"])
+    for port, data in rows:
+        db.insert_result("nvd", "ip", ip_id, {"port": port, **data})
 
 
 def _run_vulnerability_lookup(
@@ -1020,7 +1019,11 @@ def _run_vulnerability_lookup(
     A CVE is only looked up (and persisted) when the service's CPE carries a
     concrete version: a versionless/wildcard CPE matched against NVD returns
     every CVE ever filed for the product regardless of the running version, so
-    those are skipped rather than flagged.
+    those are skipped rather than flagged. Likewise only CVEs that state the
+    version as affected are kept (see nvd.affected_versions).
+
+    Each lookup replaces the IP's stored CVE results - unless NVD didn't
+    answer for one of its CPEs, in which case the earlier results stay.
 
     `client` is one shared NvdClient reused across every concurrently-
     running domain (not one per domain) - NvdClient is internally
@@ -1031,13 +1034,20 @@ def _run_vulnerability_lookup(
         return
 
     cve_cache: dict[str, list[dict]] = {}
+    # CPEs NVD gave no answer for - an IP with one keeps its earlier results.
+    unanswered: set[str] = set()
 
     def lookup(cpe: str) -> list[dict]:
         if cpe not in cve_cache:
             try:
                 cves = client.lookup_cves(cpe)
+            except NvdUnavailableError as exc:
+                logger.warning("%s - continuing", exc)
+                unanswered.add(cpe)
+                cves = []
             except Exception:
                 logger.exception("nvd lookup failed for %s - continuing", cpe)
+                unanswered.add(cpe)
                 cves = []
             # Annotate each CVE with any public exploit from the local
             # Exploit-DB (no-op when searchsploit isn't installed). Cached
@@ -1057,14 +1067,6 @@ def _run_vulnerability_lookup(
             cve_cache[cpe] = cves
         return cve_cache[cpe]
 
-    def persist(ip_id: int, port: int, data: dict) -> None:
-        try:
-            db.insert_result("nvd", "ip", ip_id, {"port": port, **data})
-        except Exception:
-            logger.exception(
-                "failed to persist nvd result for %s port %s - continuing", data.get("cpe"), port
-            )
-
     seen_ip_ids: set[int] = set()
     for hostname_row in db.list_hostnames_for_domain(domain_id):
         for ip_row in db.list_ips_for_hostname(hostname_row["id"]):
@@ -1075,7 +1077,7 @@ def _run_vulnerability_lookup(
             if ck.done(step):
                 continue
 
-            _purge_versionless_nvd(db, ip_row["id"])
+            rows: list[tuple[int, dict]] = []
             webtech_checks = _webtech_cpe_checks(db, ip_row["id"])
             webtech_checks += _php_cpe_checks(
                 db, ip_row["id"], {cpe for *_, cpes in webtech_checks for cpe in cpes}
@@ -1104,10 +1106,8 @@ def _run_vulnerability_lookup(
                 looked_up.add((service["port"], cpe))
                 cves = lookup(cpe)
                 if cves:
-                    persist(
-                        ip_row["id"],
-                        service["port"],
-                        {"cpe": cpe, "cpe_guessed": guessed, "cves": cves},
+                    rows.append(
+                        (service["port"], {"cpe": cpe, "cpe_guessed": guessed, "cves": cves})
                     )
 
             for port, technology, version, cpes in webtech_checks:
@@ -1124,8 +1124,7 @@ def _run_vulnerability_lookup(
                         cves_by_id.setdefault(cve["cve_id"], cve)
                 if not cves_by_id:
                     continue
-                persist(
-                    ip_row["id"],
+                rows.append((
                     port,
                     {
                         "cpe": matched_cpes[0] if len(matched_cpes) == 1 else matched_cpes,
@@ -1134,7 +1133,22 @@ def _run_vulnerability_lookup(
                         "version": version,
                         "cves": list(cves_by_id.values()),
                     },
+                ))
+
+            if {cpe for _, cpe in looked_up} & unanswered:
+                # Not checkpointed either, so a resumed job tries again.
+                logger.warning(
+                    "nvd: no answer for some of %s's CPEs - keeping its earlier CVE results",
+                    ip_row["address"],
                 )
+                continue
+            try:
+                _replace_nvd_results(db, ip_row["id"], rows)
+            except Exception:
+                logger.exception(
+                    "failed to persist nvd results for %s - continuing", ip_row["address"]
+                )
+                continue
             ck.mark(step)
 
 

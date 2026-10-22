@@ -178,6 +178,7 @@ def _flatten_nvd_vulns(results: list[tuple[str, dict]]) -> list[dict]:
                     "cvss_score": cve.get("cvss_score"),
                     "cvss_severity": cve.get("cvss_severity"),
                     "summary": cve.get("summary"),
+                    "affected": cve.get("affected"),
                     "exploits": cve.get("exploits", []),
                 }
             )
