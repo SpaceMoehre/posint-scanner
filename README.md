@@ -424,6 +424,8 @@ database, never hand-edited or read back.
 | `greynoise` | passive | enrichment | GreyNoise Community: is the IP a known scanner / benign service. Keyless, optional key |
 | `ipinfo` | passive | enrichment | geolocation, org/ASN, PTR hostname. Keyless, optional token |
 | `abuseipdb` | passive | enrichment | abuse-report score/history and associated hostnames; free key: 1000/day by default |
+| `leakix` | passive | enrichment + collection | LeakIX index of exposed services and leaks (open DBs, exposed `.env`/`.git`, no-auth access) per IP and per domain, plus the domain's subdomains. Severity-graded findings. Free key required, ~1 req/s |
+| `grayhatwarfare` | passive | collection | queries GrayHatWarfare's index of already-public cloud buckets by the domain's label (passive counterpart to `bucketsearch`); findings stored as public cloud assets. Free key required. Candidates - confirm ownership |
 | `bucketsearch` | active | collection | guesses cloud storage bucket names (domain label + suffixes, or names you supply) and checks S3/GCS/Azure for public exposure. Off by default; never reads bucket contents |
 | `rdap` | passive | collection | the domain's registration record: registrar, registered/expiry/last-changed dates, EPP status, nameservers, DNSSEC. Contact entities are dropped. Keyless, 7-day TTL |
 | `entra_id` | passive | collection | Microsoft Entra ID / M365 tenant: tenant ID, region, managed vs federated (+ ADFS sign-in URL), seamless SSO, branding, every domain in the same tenant (fed back as candidate domains), `.onmicrosoft.com` name, Defender for Identity, M365 DNS records. Keyless, 7-day TTL |

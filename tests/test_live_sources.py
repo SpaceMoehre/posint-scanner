@@ -31,7 +31,7 @@ HTTP_DISCOVERY = [
     "fullhunt_web",
 ]
 HTTP_IP_ENRICHMENT = ["greynoise", "ipinfo", "hackertarget", "urlscan", "abuseipdb", "otx",
-                      "virustotal"]
+                      "virustotal", "leakix"]
 IP = "192.0.43.8"  # iana.org's web server
 
 
@@ -55,6 +55,14 @@ def test_rdap_collects_registration_record():
     data = build("rdap").collect(DOMAIN).data
     assert data["registrar"]
     assert data["expires"]
+
+
+def test_grayhatwarfare_collects_without_error():
+    # Keyed; skipped without OSINT_GRAYHATWARFARE_API_KEY. iana.org may have no
+    # indexed buckets, so only assert the call succeeds and is well-formed.
+    result = build("grayhatwarfare").collect(DOMAIN)
+    assert result.target == DOMAIN
+    assert "buckets_found" in result.data
 
 
 @pytest.mark.parametrize("name", HTTP_IP_ENRICHMENT)

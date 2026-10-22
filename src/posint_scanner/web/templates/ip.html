@@ -101,6 +101,24 @@
 </table>
 {% endif %}
 
+{% if ip.leakix_findings %}
+<h2>LeakIX exposures ({{ ip.leakix_findings|length }})</h2>
+<p class="note">Exposed services and leaks LeakIX has indexed on this host (open databases, exposed config/.git, no-auth access). Passive index data - verify before acting.</p>
+<table class="dt">
+  <thead><tr><th data-filter="select">Severity</th><th data-filter="select">Plugin</th><th>Summary</th><th>Where</th></tr></thead>
+  <tbody>
+  {% for f in ip.leakix_findings %}
+  <tr>
+    <td data-sort="{{ f.severity }}"><span class="badge b-{{ (f.severity or 'unknown')|upper }}">{{ f.severity or "unknown" }}</span></td>
+    <td><code>{{ f.id }}</code></td>
+    <td>{{ f.title }}</td>
+    <td class="muted">{{ f.detail }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 {% if ip.header_findings %}
 <h2>HTTP security headers ({{ ip.header_findings|length }})</h2>
 <p class="note">Missing or weak response security headers on this host's web services (from the tech-fingerprint stage).</p>

@@ -215,6 +215,32 @@ class TestReadPages:
         assert "Container / orchestration exposure" in r.text
         assert "docker-api" in r.text
 
+    def test_domain_page_shows_leakix_exposures(self, seeded_db, tmp_path):
+        with Database(seeded_db) as db:
+            domain_id = db.get_domain_by_name("dns-net.de")["id"]
+            db.insert_result("leakix", "domain", domain_id, {
+                "findings": [{"id": "DotEnvConfigPlugin", "severity": "high",
+                              "title": "Exposed .env file", "detail": "https port 443"}],
+                "subdomain_count": 3,
+            })
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
+        r = TestClient(app).get("/domains/dns-net.de")
+        assert "LeakIX exposures" in r.text
+        assert "Exposed .env file" in r.text
+
+    def test_ip_page_shows_leakix_exposures(self, seeded_db, tmp_path):
+        with Database(seeded_db) as db:
+            ip_id = db.get_ip_by_address("212.86.33.249")["id"]
+            db.insert_result("leakix", "ip", ip_id, {
+                "findings": [{"id": "GitConfigPlugin", "severity": "critical",
+                              "title": "Exposed .git directory", "detail": "http port 80"}],
+                "service_count": 1,
+            })
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
+        r = TestClient(app).get("/ips/212.86.33.249")
+        assert "LeakIX exposures" in r.text
+        assert "Exposed .git directory" in r.text
+
     def test_ip_page_shows_security_header_findings(self, seeded_db, tmp_path):
         with Database(seeded_db) as db:
             ip_id = db.get_ip_by_address("212.86.33.249")["id"]

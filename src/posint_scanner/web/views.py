@@ -239,6 +239,13 @@ def build_domain(db: Database, name: str) -> dict | None:
     )
     origin = next((r["data"] for r in domain_results if r["source"] == "origin_ip"), None)
     email_auth = next((r["data"] for r in domain_results if r["source"] == "email_auth"), None)
+    # Already severity-sorted by the source (leakix.parse_events).
+    leakix_findings = [
+        finding
+        for r in domain_results
+        if r["source"] == "leakix"
+        for finding in r["data"].get("findings") or []
+    ]
     # Takeover findings live on their hostname, but any that didn't map back to
     # a known hostname were persisted on the domain - include both.
     takeovers += [r["data"] for r in domain_results if r["source"] == "takeover"]
@@ -251,6 +258,7 @@ def build_domain(db: Database, name: str) -> dict | None:
         "lookalikes": lookalikes,
         "origin": origin,
         "email_auth": email_auth,
+        "leakix_findings": leakix_findings,
         "results": domain_results,
         "takeovers": takeovers,
         "cloud_findings": cloud_findings(domain_results),
@@ -347,6 +355,13 @@ def build_ip(db: Database, address: str) -> dict | None:
         ),
         key=lambda f: severity_rank(f.get("severity")),
     )
+    # Already severity-sorted by the source (leakix.parse_events).
+    leakix_findings = [
+        finding
+        for r in results
+        if r["source"] == "leakix"
+        for finding in r["data"].get("findings") or []
+    ]
     return {
         "address": address,
         "first_seen": row["first_seen"],
@@ -358,6 +373,7 @@ def build_ip(db: Database, address: str) -> dict | None:
         "nuclei": nuclei,
         "web_findings": web_findings(results),
         "header_findings": header_findings,
+        "leakix_findings": leakix_findings,
         "container_exposures": container_exposures,
         "code_exposures": [dict(r) for r in db.list_code_exposures_for_target(address)],
     }

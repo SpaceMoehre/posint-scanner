@@ -50,10 +50,12 @@ from posint_scanner.sources.entra_id import EntraIdSource
 from posint_scanner.sources.fullhunt import FullHuntSource
 from posint_scanner.sources.fullhunt_web import FullHuntWebSource
 from posint_scanner.sources.github import GitHubSource
+from posint_scanner.sources.grayhatwarfare import GrayHatWarfareSource
 from posint_scanner.sources.greynoise import GreyNoiseSource
 from posint_scanner.sources.hunter import HunterSource
 from posint_scanner.sources.hackertarget import HackerTargetSource
 from posint_scanner.sources.ipinfo import IpInfoSource
+from posint_scanner.sources.leakix import LeakIxSource
 from posint_scanner.sources.lookalike import LookalikeSource
 from posint_scanner.sources.netlas import NetlasSource
 from posint_scanner.sources.origin_ip import OriginIpSource
@@ -102,6 +104,7 @@ SOURCE_CLASSES: list[type[Source]] = [
     GreyNoiseSource,
     IpInfoSource,
     AbuseIpDbSource,
+    LeakIxSource,
     PingSource,
     PortScanSource,
     ContainerExposureSource,
@@ -114,6 +117,7 @@ SOURCE_CLASSES: list[type[Source]] = [
     LookalikeSource,
     OriginIpSource,
     BucketSearchSource,
+    GrayHatWarfareSource,
     GitHubSource,
     # collection: email addresses
     TheHarvesterSource,

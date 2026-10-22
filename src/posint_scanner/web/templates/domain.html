@@ -196,6 +196,24 @@
 </table>
 {% endif %}
 
+{% if d.leakix_findings %}
+<h2>LeakIX exposures ({{ d.leakix_findings|length }})</h2>
+<p class="note">Exposed services and leaks LeakIX has indexed for this domain's hosts (open databases, exposed config/.git, no-auth access). Passive index data - verify before acting.</p>
+<table class="dt">
+  <thead><tr><th data-filter="select">Severity</th><th data-filter="select">Plugin</th><th>Summary</th><th>Where</th></tr></thead>
+  <tbody>
+  {% for f in d.leakix_findings %}
+  <tr>
+    <td data-sort="{{ f.severity }}"><span class="badge b-{{ (f.severity or 'unknown')|upper }}">{{ f.severity or "unknown" }}</span></td>
+    <td><code>{{ f.id }}</code></td>
+    <td>{{ f.title }}</td>
+    <td class="muted">{{ f.detail }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 {% if d.email_auth %}
 {% set ea = d.email_auth %}
 <h2>Email authentication
