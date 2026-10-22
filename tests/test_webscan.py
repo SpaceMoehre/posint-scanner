@@ -2,11 +2,14 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+from posint_scanner import proxy, toolrun
 from posint_scanner.webscan import (
     NiktoScanner,
+    Php2ShellScanner,
     TakeoverScanner,
     WpscanScanner,
     parse_nikto,
+    parse_phpcheck,
     parse_takeover,
     parse_wpscan,
 )
@@ -204,3 +207,66 @@ class TestScannerRuns:
         assert len(findings) == 1
         assert captured["hosts"] == ["assets.example.com"]  # deduped, blank dropped
         assert captured["cmd"][captured["cmd"].index("-o") + 1].endswith(".json")
+
+
+def _phpcheck_json(status, version, code):
+    return json.dumps({"patch_status": status, "php_version": version,
+                       "reason": f"PHP {version}" if version else "PHP version not found",
+                       "exit_code": code}) + "\n"
+
+
+class TestParsePhpcheck:
+    def test_vulnerable_is_critical(self):
+        f = parse_phpcheck(_phpcheck_json("vulnerable", "8.4.26-1ubuntu1", 1), "https://a/")
+        assert (f["tool"], f["severity"], f["patch_status"]) == ("php2shell", "critical", "vulnerable")
+        assert f["php_version"] == "8.4.26-1ubuntu1"
+        assert f["url"] == "https://a/"
+
+    def test_ok_and_unknown_with_a_version_are_kept_as_info(self):
+        assert parse_phpcheck(_phpcheck_json("ok", "8.4.27", 0), "u")["severity"] == "info"
+        unknown = parse_phpcheck(_phpcheck_json("unknown", "9.0.0", 3), "u")
+        assert (unknown["severity"], unknown["php_version"]) == ("unknown", "9.0.0")
+
+    def test_no_version_or_garbage_is_nothing(self):
+        assert parse_phpcheck(_phpcheck_json("unknown", None, 3), "u") is None
+        assert parse_phpcheck("", "u") is None
+        assert parse_phpcheck("Provide a URL or --local", "u") is None
+
+
+class TestPhp2ShellScanner:
+    def test_runs_per_url_and_stores_the_report(self, monkeypatch):
+        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: "/usr/bin/phpcheck")
+        calls, stored = [], {}
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+
+            class Done:
+                returncode = 1
+                stdout = _phpcheck_json("vulnerable", "8.4.26", 1)
+                stderr = ""
+
+            return Done()
+
+        with patch("posint_scanner.toolrun.run_tool", side_effect=fake_run):
+            findings = Php2ShellScanner().scan(
+                ["https://a/", "https://a/", "http://b:8080/"],
+                report=lambda target, rep: stored.__setitem__(target, rep),
+            )
+        assert [c[0][1] for c in calls] == ["https://a/", "http://b:8080/"]  # deduped
+        assert "--json" in calls[0][0]
+        assert calls[0][1]["env"] == {"NODE_TLS_REJECT_UNAUTHORIZED": "0"}  # TLS not validated
+        assert len(findings) == 2
+        assert json.loads(toolrun.decompress(stored["https://a/"].data))["php_version"] == "8.4.26"
+
+    def test_absent_or_proxied_is_skipped(self, monkeypatch):
+        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        assert Php2ShellScanner().scan(["https://a/"]) == []
+        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: "/usr/bin/phpcheck")
+        proxy.configure("127.0.0.1:9050")
+        try:
+            with patch("posint_scanner.toolrun.run_tool") as run:
+                assert Php2ShellScanner().scan(["https://a/"]) == []
+            run.assert_not_called()
+        finally:
+            proxy.configure(None)

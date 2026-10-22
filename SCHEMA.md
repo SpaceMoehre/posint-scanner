@@ -167,6 +167,39 @@ Key/value app settings edited on the web UI's Settings page (see
 | key    | TEXT PK | e.g. `proxy_url`, `proxy_dns_server` |
 | value  | TEXT NOT NULL | |
 
+### `scan_jobs`
+The web UI's scan jobs (see `web/scans.py`), so they outlive the process: a
+job still `pending`/`running`/`cancelling` when the server starts was cut off
+and is set to `interrupted`.
+
+| column      | type | notes |
+|-------------|------|-------|
+| id          | TEXT PK | |
+| domain      | TEXT NOT NULL | the domain the scan was started for |
+| options     | TEXT NOT NULL | JSON of the job's `ScanOptions` (stages, sources) |
+| status      | TEXT NOT NULL | `pending`, `running`, `cancelling`, `cancelled`, `completed`, `failed`, `interrupted` |
+| stage       | TEXT NOT NULL | last stage reported |
+| detail      | TEXT NOT NULL | |
+| error       | TEXT | for `failed` |
+| created_at  | TEXT NOT NULL | |
+| started_at  | TEXT | first start, kept across resumes - source calls since then aren't repeated |
+| finished_at | TEXT | |
+| resumes     | INTEGER NOT NULL | how often the job was resumed |
+
+### `scan_checkpoints`
+What a scan job already finished (see `orchestrator.Checkpoints`), so
+resuming it skips that work. Written only after the step's data is stored.
+Dropped when the job completes, and per domain when the domain is deleted.
+
+| column  | type | notes |
+|---------|------|-------|
+| job_id  | TEXT NOT NULL | |
+| domain  | TEXT NOT NULL | |
+| step    | TEXT NOT NULL | `stage:<name>`, a per-target run like `nuclei:<ip>` / `fingerprint:<ip>:<port>/<proto>` / `repo:<url>`, `queued` (a TLD sibling the job picked up) or `done` (domain finished) |
+| done_at | TEXT NOT NULL | |
+
+Primary key `(job_id, domain, step)`.
+
 ### `code_exposures`
 Public GitHub code the `github` source found naming a domain's hostnames/IPs,
 and secrets detected in those files. `kind` is `reference` (the target is

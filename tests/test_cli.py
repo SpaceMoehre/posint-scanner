@@ -185,6 +185,7 @@ class TestSourceSelectionFlags:
         assert {"ping", "portscan", "crtsh", "shodan"} <= names
         assert "shodan_web" not in names
         assert kwargs["tech_fingerprint"] is True
+        assert kwargs["php2shell_scan"] is True
         assert kwargs["fresh"] is False
 
     def test_source_flag_enables_opt_in_source(self, tmp_path):
@@ -211,6 +212,11 @@ class TestSourceSelectionFlags:
         assert "portscan" not in names
         assert "shodan" in names
         assert kwargs["tech_fingerprint"] is False
+        assert kwargs["php2shell_scan"] is False
+
+    def test_no_php2shell_flag(self, tmp_path):
+        _, kwargs, _ = scan_with_real_registry(tmp_path, "--no-php2shell")
+        assert kwargs["php2shell_scan"] is False
 
     def test_explicit_fingerprint_wins_over_no_active(self, tmp_path):
         _, kwargs, _ = scan_with_real_registry(tmp_path, "--no-active", "--fingerprint")

@@ -8,6 +8,7 @@ import pytest
 from posint_scanner.db import Database
 from posint_scanner.models import DiscoveredHostname, EnrichmentResult, ServiceInfo
 from posint_scanner.orchestrator import (
+    Checkpoints,
     ScanControl,
     _fallback_24s,
     _persist_discovered_hostnames,
@@ -993,6 +994,80 @@ class TestWebAppScanStage:
         wpscan.assert_not_called()
 
 
+class TestPhp2ShellStage:
+    """--php2shell: php2shell-checker per web service; its PHP version feeds
+    the CVE lookup."""
+
+    def _svc_source(self):
+        class SvcEnrich(Source):
+            name = "svc-enrich"
+
+            def enrich(self, target, hostnames):
+                return EnrichmentResult(
+                    source=self.name, target_type="ip", target=target,
+                    services=[ServiceInfo(port=8080, protocol="tcp")],
+                )
+        return SvcEnrich()
+
+    @staticmethod
+    def _finding(version, status="vulnerable"):
+        return {"tool": "php2shell", "kind": "info", "severity": "critical", "id": "php2shell",
+                "title": "t", "resource": f"PHP {version}", "url": "http://api.example.com:8080/",
+                "target": "http://api.example.com:8080/", "cves": [], "reference": None,
+                "location": None, "php_version": version, "patch_status": status}
+
+    def _scan(self, db, findings, **kwargs):
+        with (
+            patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
+            patch("posint_scanner.webscan.Php2ShellScanner.available", True),
+            patch("posint_scanner.webscan.Php2ShellScanner.scan", return_value=findings) as scan,
+        ):
+            run_scan(db, ["example.com"], [FakeDiscoverySource(), self._svc_source()],
+                     netblock_sweep=False, tech_fingerprint=False, **kwargs)
+        return scan
+
+    def test_on_by_default_and_can_be_turned_off(self, db, no_live_nvd_lookup):
+        self._scan(db, []).assert_called_once()
+        self._scan(db, [], php2shell_scan=False).assert_not_called()
+
+    def test_disclosed_version_is_stored_and_its_cves_looked_up(self, db, no_live_nvd_lookup):
+        no_live_nvd_lookup.return_value = [{"cve_id": "CVE-2024-4577", "cvss_score": 9.8}]
+        scan = self._scan(db, [self._finding("8.4.26-1ubuntu1")], php2shell_scan=True)
+        assert all(u.endswith(":8080/") for u in scan.call_args[0][0])
+
+        no_live_nvd_lookup.assert_called_once_with("cpe:2.3:a:php:php:8.4.26:*:*:*:*:*:*:*")
+        ip_id = db.get_ip_by_address("1.2.3.4")["id"]
+        rows = [(r["source"], json.loads(r["data"])) for r in db.list_results_for_target("ip", ip_id)]
+        assert [d["php_version"] for src, d in rows if src == "php2shell"] == ["8.4.26-1ubuntu1"]
+        (nvd,) = [d for src, d in rows if src == "nvd"]
+        assert (nvd["technology"], nvd["version"], nvd["port"]) == ("PHP", "8.4.26", 8080)
+        assert nvd["cves"][0]["cve_id"] == "CVE-2024-4577"
+
+    def test_rescan_replaces_old_versions(self, db, no_live_nvd_lookup):
+        self._scan(db, [self._finding("8.4.26")], php2shell_scan=True, vuln_lookup=False)
+        self._scan(db, [self._finding("8.4.27", "ok")], php2shell_scan=True, vuln_lookup=False)
+        ip_id = db.get_ip_by_address("1.2.3.4")["id"]
+        versions = [json.loads(r["data"])["php_version"]
+                    for r in db.list_results_for_target("ip", ip_id) if r["source"] == "php2shell"]
+        assert versions == ["8.4.27"]
+
+    def test_prerelease_version_is_not_looked_up(self, db, no_live_nvd_lookup):
+        self._scan(db, [self._finding("8.4.27RC1", "unknown")], php2shell_scan=True)
+        no_live_nvd_lookup.assert_not_called()
+
+
+class TestPhpRelease:
+    def test_strips_distro_suffixes_and_rejects_prereleases(self):
+        from posint_scanner.orchestrator import php_release
+
+        assert php_release("8.4.26") == "8.4.26"
+        assert php_release("8.4.27-1+ubuntu24.04.1+deb.sury.org+1") == "8.4.27"
+        assert php_release("8.4.27RC1") is None
+        assert php_release("8.4.27-rc1") is None
+        assert php_release("8.4") is None
+        assert php_release(None) is None
+
+
 class TestTakeoverStage:
     """Subdomain-takeover scanning (--takeover) over discovered hostnames."""
 
@@ -1912,3 +1987,99 @@ class TestCodeExposurePersistence:
         assert len(rows) == 1
         assert rows[0]["repo"] == "acme/ops"
         assert rows[0]["line"] == 9
+
+
+class DomainRecordingSource(FakeDiscoverySource):
+    name = "recording-discovery"
+
+    def __init__(self):
+        super().__init__()
+        self.domains = []
+
+    def discover(self, domain):
+        self.domains.append(domain)
+        return super().discover(domain)
+
+
+class TestResume:
+    """A scan job's checkpoints let it continue where an earlier run of it
+    stopped (see orchestrator.Checkpoints)."""
+
+    def _run(self, db, sources, job="job1", **kwargs):
+        with patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]):
+            run_scan(db, ["example.com"], sources, netblock_sweep=False,
+                     checkpoints=Checkpoints(db, job, since="2026-01-01T00:00:00+00:00"),
+                     **kwargs)
+
+    def _steps(self, db, job="job1"):
+        return {(r["domain"], r["step"]) for r in db.list_scan_checkpoints(job)}
+
+    def test_finished_stages_and_domain_are_recorded(self, db):
+        self._run(db, [FakeDiscoverySource()])
+        steps = self._steps(db)
+        assert ("example.com", "stage:discovery") in steps
+        assert ("example.com", "stage:cloud audit") in steps
+        assert ("example.com", "done") in steps
+
+    def test_finished_domain_is_not_scanned_again(self, db):
+        self._run(db, [FakeDiscoverySource()])
+        source = DomainRecordingSource()
+        self._run(db, [source])
+        assert source.domains == []
+
+    def test_without_a_job_nothing_is_recorded_or_skipped(self, db):
+        source = DomainRecordingSource()
+        for _ in range(2):
+            with patch("posint_scanner.orchestrator.resolve_hostname", return_value=[]):
+                run_scan(db, ["example.com"], [source], netblock_sweep=False)
+        assert source.domains == ["example.com", "example.com"]
+        assert db.conn.execute("SELECT COUNT(*) FROM scan_checkpoints").fetchone()[0] == 0
+
+    def test_crash_mid_scan_resumes_at_the_failed_stage(self, db, no_live_fingerprint):
+        source = DomainRecordingSource()
+        enrich = FakeIpEnrichSource()
+        no_live_fingerprint.side_effect = RuntimeError("container stopped")
+        self._run(db, [source, enrich])
+        assert ("example.com", "stage:enrichment") in self._steps(db)
+        assert ("example.com", "stage:fingerprint") not in self._steps(db)
+
+        no_live_fingerprint.side_effect = None
+        no_live_fingerprint.return_value = None
+        no_live_fingerprint.reset_mock()
+        with patch.object(FakeIpEnrichSource, "enrich") as enrich_call:
+            self._run(db, [source, enrich])
+        assert source.domains == ["example.com"]  # discovery not repeated
+        enrich_call.assert_not_called()  # nor enrichment
+        no_live_fingerprint.assert_called_once()  # the failed stage reruns
+        assert ("example.com", "done") in self._steps(db)
+
+    def test_per_ip_tool_runs_already_done_are_skipped(self, db, no_live_fingerprint):
+        no_live_fingerprint.side_effect = lambda address, port, protocol, hostnames: {
+            "url": f"http://{address}:{port}/", "status": 200, "technologies": {},
+            "categories": {}, "cpes": {}, "server_product": None, "server_version": None,
+        }
+        db.add_scan_checkpoint("job1", "example.com", "nuclei:1.2.3.4")
+        with (
+            patch("posint_scanner.orchestrator.resolve_hostname",
+                  side_effect=lambda name: ["1.2.3.4"] if name.startswith("api") else ["5.6.7.8"]),
+            patch("posint_scanner.nuclei.NucleiScanner.available", True),
+            patch("posint_scanner.nuclei.NucleiScanner.scan", return_value=[]) as scan,
+        ):
+            run_scan(db, ["example.com"], [FakeDiscoverySource(), FakeIpEnrichSource()],
+                     netblock_sweep=False, vuln_lookup=False, nuclei_scan=True,
+                     checkpoints=Checkpoints(db, "job1"))
+        scan.assert_called_once_with(["http://5.6.7.8:443/"], report=ANY)
+        assert ("example.com", "nuclei:5.6.7.8") in self._steps(db)
+
+    def test_queued_tld_sibling_is_scanned_on_resume(self, db):
+        db.add_scan_checkpoint("job1", "example.de", "queued")
+        source = DomainRecordingSource()
+        self._run(db, [source])
+        assert sorted(source.domains) == ["example.com", "example.de"]
+
+    def test_tld_sibling_found_mid_run_is_recorded(self, db):
+        from posint_scanner.orchestrator import ScanTargets
+
+        targets = ScanTargets(["example.com"], Checkpoints(db, "job1"))
+        assert targets.add("example.de")
+        assert ("example.de", "queued") in self._steps(db)

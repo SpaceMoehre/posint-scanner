@@ -98,6 +98,50 @@ class TestTtl:
         governor(db, clock).run(src, "ip", "1.2.3.4", lambda: "a")
         assert governor(db, clock, fresh=True).run(src, "ip", "1.2.3.4", lambda: "b") == "b"
 
+
+class TestResume:
+    def _resumed(self, db, clock, since, fresh=False):
+        return SourceGovernor(
+            db, fresh=fresh, now=clock.wall, resume_since=since.isoformat(),
+            limiters=RateLimiters(monotonic=clock.monotonic, sleep=clock.sleep),
+        )
+
+    def test_call_made_since_the_job_started_is_skipped_despite_no_ttl_or_fresh(
+        self, db, clock
+    ):
+        src = source(ttl_days=0)
+        job_start = clock.now
+        governor(db, clock).run(src, "ip", "1.2.3.4", lambda: "a")
+        clock.advance(hours=1)
+        resumed = self._resumed(db, clock, job_start, fresh=True)
+        assert resumed.run(src, "ip", "1.2.3.4", lambda: "b") is None
+        assert resumed.run(src, "ip", "5.6.7.8", lambda: "c") == "c"
+
+    def test_call_from_before_the_job_still_follows_ttl(self, db, clock):
+        src = source(ttl_days=0)
+        governor(db, clock).run(src, "ip", "1.2.3.4", lambda: "a")
+        clock.advance(hours=1)
+        assert self._resumed(db, clock, clock.now).run(src, "ip", "1.2.3.4", lambda: "b") == "b"
+
+    def test_failed_call_is_retried(self, db, clock):
+        src = source(ttl_days=0)
+        job_start = clock.now
+
+        def boom():
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            governor(db, clock).run(src, "ip", "1.2.3.4", boom)
+        assert self._resumed(db, clock, job_start).run(src, "ip", "1.2.3.4", lambda: "b") == "b"
+
+    def test_discovery_calls_are_repeated(self, db, clock):
+        # Discovery stores its hostnames only once every source is done.
+        src = source(ttl_days=0)
+        job_start = clock.now
+        governor(db, clock).run(src, "domain", "example.com", lambda: "a")
+        resumed = self._resumed(db, clock, job_start)
+        assert resumed.run(src, "domain", "example.com", lambda: "b") == "b"
+
     def test_failed_call_does_not_count_as_fresh(self, db, clock):
         gov, src = governor(db, clock), source(ttl_days=7)
 

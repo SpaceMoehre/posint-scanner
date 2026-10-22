@@ -15,6 +15,9 @@
     {% else %}
     <form method="post" action="/scans/{{ job.id }}/cancel"><button type="submit">Cancel scan</button></form>
     {% endif %}
+  {% elif job.status == "interrupted" %}
+    <p class="st-interrupted">Interrupted - the server stopped during the {{ job.stage or "first" }} stage.</p>
+    <p>Partial results are saved. See <a href="/domains/{{ job.domain }}">{{ job.domain }}</a>.</p>
   {% elif job.status == "cancelled" %}
     <p class="st-failed">Cancelled.</p>
     <p>Partial results (up to the {{ job.stage }} stage) are saved. See <a href="/domains/{{ job.domain }}">{{ job.domain }}</a>.</p>
@@ -24,6 +27,11 @@
     <p class="st-failed">Failed.</p>
     <pre>{{ job.error }}</pre>
   {% endif %}
+  {% if job.resumable %}
+    <form method="post" action="/scans/{{ job.id }}/resume"><button type="submit">Resume scan</button></form>
+    <p class="note">Continues where it stopped: finished stages, tool runs and source calls aren't repeated.</p>
+  {% endif %}
+  {% if job.resumes %}<p class="muted">Resumed {{ job.resumes }}×.</p>{% endif %}
 </div>
 <p><a href="/">← Dashboard</a></p>
 {% endblock %}

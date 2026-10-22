@@ -11,7 +11,7 @@ applied at the start of every scan by `configure`. What it covers:
   * Subprocesses (git, trivy, checkov, ...) inherit those env vars; the tools
     that ignore env take an explicit flag (`tool_proxy_url`, see nuclei.py,
     subfinder.py, webscan.py). Tools that can't tunnel at all (ICMP ping,
-    Nikto, takeover, theHarvester) are skipped while a proxy is set - see
+    Nikto, takeover, theHarvester, phpcheck) are skipped while a proxy is set - see
     `unavailable_reason`.
   * Raw TCP (the port scan) via `create_connection`.
   * DNS via dnspython: SOCKS5 can't carry UDP (not portably), so every query

@@ -16,11 +16,13 @@ import gc
 import ipaddress
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from posint_scanner import toolrun
 from posint_scanner.asn import lookup_asn, lookup_asn_prefixes
@@ -41,7 +43,12 @@ from posint_scanner.models import DiscoveredHostname, EnrichmentResult, Report
 from posint_scanner.normalize import InvalidDomainError, dedup_domains, normalize_domain
 from posint_scanner.nuclei import NucleiScanner
 from posint_scanner.nvd import NvdClient, build_cpe, cpe_version
-from posint_scanner.webscan import NiktoScanner, TakeoverScanner, WpscanScanner
+from posint_scanner.webscan import (
+    NiktoScanner,
+    Php2ShellScanner,
+    TakeoverScanner,
+    WpscanScanner,
+)
 from posint_scanner.registry import (
     collection_sources,
     discovery_sources,
@@ -94,6 +101,75 @@ class ScanControl:
         if self._cancel.is_set():
             raise ScanCancelled()
 
+
+class Checkpoints:
+    """What a scan job already finished, so resuming it (after the process
+    died, or a cancel) continues where it stopped instead of starting over.
+
+    Steps are recorded per domain in `scan_checkpoints`: a whole stage once
+    it ran to the end ("stage:<name>"), the slow per-target runs inside a
+    stage ("nuclei:<ip>", ...), "queued" for a TLD sibling the job picked up
+    and "done" for a finished domain. A step is only recorded after its data
+    is stored, so a crash mid-step redoes that step. Source calls made by the
+    job are skipped through the governor instead (see `since`).
+
+    Without a job id (CLI scans) nothing is recorded and nothing skipped."""
+
+    def __init__(
+        self, db: Database | None = None, job_id: str | None = None, since: str | None = None
+    ) -> None:
+        self.db = db
+        self.job_id = job_id if db is not None else None
+        # The job's first start: source calls answered since are not repeated.
+        self.since = since if self.job_id else None
+        self._lock = threading.Lock()
+        self._done: set[tuple[str, str]] = set()
+        if self.job_id:
+            self._done = {
+                (row["domain"], row["step"]) for row in db.list_scan_checkpoints(self.job_id)
+            }
+
+    def domains(self) -> list[str]:
+        """Every domain the job has touched so far (TLD siblings included)."""
+        with self._lock:
+            return sorted({domain for domain, _ in self._done})
+
+    def done(self, domain: str, step: str) -> bool:
+        with self._lock:
+            return (domain, step) in self._done
+
+    def mark(self, domain: str, step: str) -> None:
+        if not self.job_id:
+            return
+        with self._lock:
+            if (domain, step) in self._done:
+                return
+            self._done.add((domain, step))
+        try:
+            self.db.add_scan_checkpoint(self.job_id, domain, step)
+        except Exception:
+            logger.exception("failed to record checkpoint %s for %s - continuing", step, domain)
+
+    def for_domain(self, domain: str) -> DomainCheckpoints:
+        return DomainCheckpoints(self, domain)
+
+
+class DomainCheckpoints:
+    """One domain's view of a job's Checkpoints - what the stages get."""
+
+    def __init__(self, checkpoints: Checkpoints, domain: str) -> None:
+        self._checkpoints = checkpoints
+        self.domain = domain
+
+    def done(self, step: str) -> bool:
+        return self._checkpoints.done(self.domain, step)
+
+    def mark(self, step: str) -> None:
+        self._checkpoints.mark(self.domain, step)
+
+
+NO_CHECKPOINTS = DomainCheckpoints(Checkpoints(), "")
+
 # Discovery/resolution/enrichment thread pool size (per domain). Adjustable
 # via --workers. Kept modest by default because discovery/enrichment call
 # external rate-limited APIs (Shodan, Censys) where more concurrency doesn't
@@ -145,10 +221,11 @@ class ScanTargets:
     and queued so run_scan schedules its own pipeline. Shared across the
     run's domain threads, so it's locked."""
 
-    def __init__(self, domains: list[str]) -> None:
+    def __init__(self, domains: list[str], checkpoints: Checkpoints | None = None) -> None:
         self._lock = threading.Lock()
         self._known = set(domains)
         self._queued: list[str] = []
+        self._checkpoints = checkpoints or Checkpoints()
 
     def add(self, domain: str) -> bool:
         """Queue `domain` unless this run already covers it."""
@@ -157,7 +234,9 @@ class ScanTargets:
                 return False
             self._known.add(domain)
             self._queued.append(domain)
-            return True
+        # Recorded so a resumed job still scans it.
+        self._checkpoints.mark(domain, "queued")
+        return True
 
     def take_queued(self) -> list[str]:
         with self._lock:
@@ -764,6 +843,7 @@ def _run_tech_fingerprint(
     enabled: bool,
     fingerprinter: WebTechFingerprinter,
     workers: int,
+    ck: DomainCheckpoints = NO_CHECKPOINTS,
 ) -> None:
     """Active stage: visit every open service other stages found and
     fingerprint the web technologies/versions running on it (see
@@ -791,6 +871,8 @@ def _run_tech_fingerprint(
             seen_ip_ids.add(ip_row["id"])
             hostnames = [h["name"] for h in db.list_hostnames_for_ip(ip_row["id"])]
             for service in db.list_services_for_ip(ip_row["id"]):
+                if ck.done(_fingerprint_step(ip_row["address"], service)):
+                    continue
                 jobs.append((ip_row["id"], ip_row["address"], hostnames, dict(service)))
 
     if not jobs:
@@ -807,7 +889,9 @@ def _run_tech_fingerprint(
         futures = {executor.submit(_scan, job): job for job in jobs}
         for future in as_completed(futures):
             ip_id, service, result = future.result()  # _scan never raises
+            step = _fingerprint_step(futures.pop(future)[1], service)
             if result is None:
+                ck.mark(step)
                 continue
             try:
                 db.insert_result(
@@ -828,12 +912,17 @@ def _run_tech_fingerprint(
                         result["server_product"],
                         result["server_version"],
                     )
+                ck.mark(step)
             except Exception:
                 logger.exception(
                     "failed to persist webtech result for %s port %s - continuing",
                     ip_id,
                     service["port"],
                 )
+
+
+def _fingerprint_step(address: str, service) -> str:
+    return f"fingerprint:{address}:{service['port']}/{service['protocol']}"
 
 
 def _webtech_cpe_checks(db: Database, ip_id: int) -> list[tuple[int, str, str | None, list[str]]]:
@@ -848,6 +937,49 @@ def _webtech_cpe_checks(db: Database, ip_id: int) -> list[tuple[int, str, str | 
         technologies = data.get("technologies", {})
         for technology, cpes in data.get("cpes", {}).items():
             checks.append((data["port"], technology, technologies.get(technology), cpes))
+    return checks
+
+
+# A stable PHP release from a disclosed version: "8.4.26-1ubuntu1" -> 8.4.26.
+# Prereleases (8.4.27RC1, -dev, ~beta) have no NVD release CPE to match.
+_PHP_RELEASE_RE = re.compile(r"^(\d+\.\d+\.\d+)(?:[-+~](.*))?$")
+_PRERELEASE_RE = re.compile(r"(?:^|[-+~.])(?:dev|alpha|beta|rc)", re.IGNORECASE)
+
+
+def php_release(version: str | None) -> str | None:
+    match = _PHP_RELEASE_RE.match(version or "")
+    if not match or _PRERELEASE_RE.search(match.group(2) or ""):
+        return None
+    return match.group(1)
+
+
+def _url_port(url: str) -> int:
+    parsed = urlsplit(url)
+    return parsed.port or (443 if parsed.scheme == "https" else 80)
+
+
+def _php_cpe_checks(
+    db: Database, ip_id: int, known_cpes: set[str]
+) -> list[tuple[int, str, str | None, list[str]]]:
+    """(port, "PHP", version, [CPE]) for every PHP version php2shell-checker
+    read from this IP's response headers - so a disclosed PHP version gets its
+    CVEs looked up even where the fingerprint stage didn't run or didn't see
+    it. CPEs the fingerprint stage already checks (`known_cpes`) are skipped."""
+    checks = []
+    seen: set[tuple[int, str]] = set()
+    for row in db.list_results_for_target("ip", ip_id):
+        if row["source"] != "php2shell":
+            continue
+        data = json.loads(row["data"])
+        release = php_release(data.get("php_version"))
+        if release is None:
+            continue
+        cpe = f"cpe:2.3:a:php:php:{release}:*:*:*:*:*:*:*"
+        port = _url_port(data.get("url") or "")
+        if cpe in known_cpes or (port, cpe) in seen:
+            continue
+        seen.add((port, cpe))
+        checks.append((port, "PHP", release, [cpe]))
     return checks
 
 
@@ -869,6 +1001,7 @@ def _run_vulnerability_lookup(
     enabled: bool,
     client: NvdClient,
     exploit_client: SearchSploitClient,
+    ck: DomainCheckpoints = NO_CHECKPOINTS,
 ) -> None:
     """Given whatever product/version/CPE the enrichment sources (Shodan,
     Censys, the port scanner) already found, look up matching CVEs via NVD.
@@ -938,9 +1071,15 @@ def _run_vulnerability_lookup(
             if ip_row["id"] in seen_ip_ids:
                 continue
             seen_ip_ids.add(ip_row["id"])
+            step = f"nvd:{ip_row['address']}"
+            if ck.done(step):
+                continue
 
             _purge_versionless_nvd(db, ip_row["id"])
             webtech_checks = _webtech_cpe_checks(db, ip_row["id"])
+            webtech_checks += _php_cpe_checks(
+                db, ip_row["id"], {cpe for *_, cpes in webtech_checks for cpe in cpes}
+            )
             fingerprinted = {
                 (port, technology.lower(), version)
                 for port, technology, version, _ in webtech_checks
@@ -996,6 +1135,7 @@ def _run_vulnerability_lookup(
                         "cves": list(cves_by_id.values()),
                     },
                 )
+            ck.mark(step)
 
 
 def _nuclei_targets_for_ip(db: Database, ip_id: int) -> list[str]:
@@ -1014,7 +1154,11 @@ def _nuclei_targets_for_ip(db: Database, ip_id: int) -> list[str]:
 
 
 def _run_nuclei(
-    db: Database, domain_id: int, enabled: bool, scanner: NucleiScanner
+    db: Database,
+    domain_id: int,
+    enabled: bool,
+    scanner: NucleiScanner,
+    ck: DomainCheckpoints = NO_CHECKPOINTS,
 ) -> None:
     """Active template scan (opt-in). For every IP, run Nuclei against the web
     services the fingerprint stage confirmed and persist each finding as a
@@ -1029,8 +1173,9 @@ def _run_nuclei(
             if ip_row["id"] in seen_ip_ids:
                 continue
             seen_ip_ids.add(ip_row["id"])
+            step = f"nuclei:{ip_row['address']}"
             targets = _nuclei_targets_for_ip(db, ip_row["id"])
-            if not targets:
+            if not targets or ck.done(step):
                 continue
             try:
                 findings = scanner.scan(
@@ -1047,6 +1192,7 @@ def _run_nuclei(
                         "failed to persist nuclei finding %s for %s - continuing",
                         finding.get("template_id"), ip_row["address"],
                     )
+            ck.mark(step)
             if findings:
                 logger.info(
                     "nuclei: %d finding(s) on %s", len(findings), ip_row["address"]
@@ -1081,6 +1227,7 @@ def _run_web_app_scan(
     wpscan_enabled: bool,
     nikto: NiktoScanner,
     wpscan: WpscanScanner,
+    ck: DomainCheckpoints = NO_CHECKPOINTS,
 ) -> None:
     """Active web-application scan (opt-in). For every IP, run each enabled
     scanner (Nikto, WPScan) against its resolved web services and persist each
@@ -1107,6 +1254,9 @@ def _run_web_app_scan(
             if not targets:
                 continue
             for name, scanner in runs:
+                step = f"{name}:{ip_row['address']}"
+                if ck.done(step):
+                    continue
                 try:
                     findings = scanner.scan(targets, report=_report_sink(db, domain_id, name))
                 except Exception:
@@ -1120,10 +1270,61 @@ def _run_web_app_scan(
                             "failed to persist %s finding for %s - continuing",
                             name, ip_row["address"],
                         )
+                ck.mark(step)
                 if findings:
                     logger.info(
                         "%s: %d finding(s) on %s", name, len(findings), ip_row["address"]
                     )
+
+
+def _run_php2shell(
+    db: Database,
+    domain_id: int,
+    enabled: bool,
+    scanner: Php2ShellScanner,
+    ck: DomainCheckpoints = NO_CHECKPOINTS,
+) -> None:
+    """php2shell check (on by default with the active stages). For every IP, run php2shell-checker against
+    its web services - the fingerprint-confirmed URLs, else every resolved TCP
+    service - and persist each disclosed PHP version as a `php2shell` result
+    on the IP, replacing the IP's earlier ones so the CVE lookup (which runs
+    next and reads them, see _php_cpe_checks) only sees current versions."""
+    if not enabled or not scanner.available:
+        return
+    seen_ip_ids: set[int] = set()
+    for hostname_row in db.list_hostnames_for_domain(domain_id):
+        for ip_row in db.list_ips_for_hostname(hostname_row["id"]):
+            if ip_row["id"] in seen_ip_ids:
+                continue
+            seen_ip_ids.add(ip_row["id"])
+            step = f"php2shell:{ip_row['address']}"
+            targets = _nuclei_targets_for_ip(db, ip_row["id"]) or _web_targets_for_ip(
+                db, ip_row["address"], ip_row["id"]
+            )
+            if not targets or ck.done(step):
+                continue
+            try:
+                findings = scanner.scan(targets, report=_report_sink(db, domain_id, "php2shell"))
+            except Exception:
+                logger.exception("php2shell check failed for %s - continuing", ip_row["address"])
+                continue
+            try:
+                for row in db.list_results_for_target("ip", ip_row["id"]):
+                    if row["source"] == "php2shell":
+                        db.delete_result(row["id"])
+                for finding in findings:
+                    db.insert_result("php2shell", "ip", ip_row["id"], finding)
+                ck.mark(step)
+            except Exception:
+                logger.exception(
+                    "failed to persist php2shell findings for %s - continuing", ip_row["address"]
+                )
+            vulnerable = [f for f in findings if f["patch_status"] == "vulnerable"]
+            if vulnerable:
+                logger.warning(
+                    "php2shell: PHP %s on %s is vulnerable",
+                    ", ".join(sorted({f["php_version"] for f in vulnerable})), ip_row["address"],
+                )
 
 
 def _run_takeover(
@@ -1242,6 +1443,7 @@ def _run_artifact_scan(
     trivy: TrivyScanner,
     checkov: CheckovScanner,
     cfg: CloudScanConfig,
+    ck: DomainCheckpoints = NO_CHECKPOINTS,
 ) -> None:
     """Credential-free artifact scanning (opt-in via --cloud-scan): clone the
     public repos this domain's code-exposure stage found and run Checkov (IaC
@@ -1254,12 +1456,15 @@ def _run_artifact_scan(
 
     if trivy.available:
         for ref in _image_refs_to_scan(db, domain_id, domain, cfg):
+            if ck.done(f"trivy-image:{ref}"):
+                continue
             try:
                 findings = trivy.scan_image(ref, report=_report_sink(db, domain_id, "trivy"))
             except Exception:
                 logger.exception("trivy image scan failed for %s - continuing", ref)
                 continue
             _persist_cloud_findings(db, domain_id, "trivy", ref, "image", findings)
+            ck.mark(f"trivy-image:{ref}")
             if findings:
                 logger.info("trivy: %d finding(s) in image %s", len(findings), ref)
 
@@ -1269,6 +1474,8 @@ def _run_artifact_scan(
     # One clone at a time, each deleted as soon as both tools are done with
     # it - disk use peaks at one repo, never the whole list.
     for url in repo_urls:
+        if ck.done(f"repo:{url}"):
+            continue
         with toolrun.workspace("clone") as workspace:
             dest = workspace / "repo"
             if not clone_repo(
@@ -1298,6 +1505,7 @@ def _run_artifact_scan(
                 _persist_cloud_findings(db, domain_id, "trivy", url, "repo", findings)
                 if findings:
                     logger.info("trivy fs: %d finding(s) in %s", len(findings), url)
+        ck.mark(f"repo:{url}")
 
 
 def _run_cloud_audit(
@@ -1308,6 +1516,7 @@ def _run_cloud_audit(
     prowler: ProwlerScanner,
     scoutsuite: ScoutSuiteScanner,
     providers: list[str],
+    ck: DomainCheckpoints = NO_CHECKPOINTS,
 ) -> None:
     """Authenticated cloud-account auditing (opt-in via --cloud-audit): run
     Prowler and ScoutSuite against each configured provider, using credentials
@@ -1319,7 +1528,8 @@ def _run_cloud_audit(
         return
     for provider in providers:
         for scanner, source in ((prowler, "prowler"), (scoutsuite, "scoutsuite")):
-            if not scanner.available:
+            step = f"{source}:{provider}"
+            if not scanner.available or ck.done(step):
                 continue
             try:
                 findings = scanner.scan(provider, report=_report_sink(db, domain_id, source))
@@ -1327,6 +1537,7 @@ def _run_cloud_audit(
                 logger.exception("%s audit of %s failed - continuing", source, provider)
                 continue
             _persist_cloud_findings(db, domain_id, source, provider, "cloud-account", findings)
+            ck.mark(step)
             logger.info("%s: %d finding(s) for %s", source, len(findings), provider)
 
 
@@ -1410,6 +1621,8 @@ def _run_domain_pipeline(
     nikto_scanner: NiktoScanner,
     wpscan_scanner: WpscanScanner,
     takeover_scanner: TakeoverScanner,
+    php2shell_scan: bool,
+    php2shell_scanner: Php2ShellScanner,
     cloud_scan: bool,
     cloud_audit: bool,
     trivy: TrivyScanner,
@@ -1420,6 +1633,7 @@ def _run_domain_pipeline(
     governor: SourceGovernor,
     control: ScanControl,
     targets: ScanTargets | None = None,
+    checkpoints: Checkpoints | None = None,
 ) -> None:
     """One domain's full pipeline. Wrapped in a try/except so an unexpected
     failure in any stage costs only this domain, not the rest of a
@@ -1427,73 +1641,117 @@ def _run_domain_pipeline(
     so this is the same "one failure never aborts the whole scan" principle
     already applied to individual sources and DB writes, just at the scope
     that actually matches how domains are now scheduled."""
+    ck = checkpoints.for_domain(domain) if checkpoints is not None else NO_CHECKPOINTS
     try:
+        if ck.done("done"):
+            logger.info("%s already finished by this job - skipped", domain)
+            return
         logger.info("scanning %s", domain)
         control.progress("starting", domain)
-        # Captured before any resolution writes so that, when continuing a
-        # prior scan, every mapping this run re-observes sorts after it and
-        # only genuinely stale mappings fall before it.
-        run_started_at = datetime.now(timezone.utc).isoformat()
+
+        def stage(name: str, run: Callable[[], None], step: str | None = None) -> None:
+            """Run one stage unless this job already finished it; record it
+            once it ran to the end, then honour a cancel."""
+            step = step or name
+            if ck.done(f"stage:{step}"):
+                logger.info("%s: %s already done by this job - skipped", domain, step)
+                return
+            control.progress(name, domain)
+            run()
+            ck.mark(f"stage:{step}")
+            _end_stage(control)
+
         # Continuation is automatic: if this domain is already in the DB, this
         # is a re-scan, so revalidate and prune afterwards. A domain never seen
         # before has nothing to prune. Checked before discovery upserts it.
         resume = db.get_domain_by_name(domain) is not None
         if resume:
             logger.info("%s already scanned - will revalidate and prune stale results", domain)
-        control.progress("discovery", domain)
-        domain_id = _run_discovery_for_domain(db, disco_sources, domain, workers, governor)
-        _end_stage(control)
-        control.progress("collection", domain)
-        _run_collection(db, collect_sources, domain, domain_id, workers, governor, targets)
-        _end_stage(control)
-        control.progress("resolution", domain)
-        _run_resolution(db, domain_id, workers)
-        _end_stage(control)
-        control.progress("netblock sweep", domain)
-        _run_netblock_sweep(
-            db,
-            domain,
-            domain_id,
-            netblock_sweep,
-            netblock_sweep_max_addresses,
-            netblock_sweep_resolvers,
-            netblock_sweep_workers,
+        domain_id = db.upsert_domain(domain)
+        stage(
+            "discovery",
+            lambda: _run_discovery_for_domain(db, disco_sources, domain, workers, governor),
         )
-        _run_resolution(db, domain_id, workers)  # forward-resolve any netblock-swept hostnames too
-        # Prune before enrichment so stages don't waste work on IPs that DNS
-        # no longer points to (and that revalidation is about to remove).
-        if resume:
-            _revalidate(db, domain_id, domain, run_started_at)
-        _end_stage(control)
-        control.progress("enrichment", domain)
-        _run_enrichment_with_feedback(
-            db, enrich_sources, domain, domain_id, workers, governor, targets
+        stage(
+            "collection",
+            lambda: _run_collection(
+                db, collect_sources, domain, domain_id, workers, governor, targets
+            ),
         )
-        _end_stage(control)
-        control.progress("fingerprint", domain)
-        _run_tech_fingerprint(db, domain_id, tech_fingerprint, fingerprinter, workers)
-        _end_stage(control)
-        control.progress("vulnerability lookup", domain)
-        _run_vulnerability_lookup(db, domain_id, vuln_lookup, nvd_client, exploit_client)
-        _end_stage(control)
-        control.progress("nuclei", domain)
-        _run_nuclei(db, domain_id, nuclei_scan, nuclei_scanner)
-        _end_stage(control)
-        control.progress("web app scan", domain)
-        _run_web_app_scan(
-            db, domain_id, nikto_scan, wpscan_scan, nikto_scanner, wpscan_scanner
+
+        def resolve_and_sweep() -> None:
+            # Captured before any resolution writes so that, when continuing a
+            # prior scan, every mapping this run re-observes sorts after it and
+            # only genuinely stale mappings fall before it. Resolution, sweep
+            # and pruning are one checkpointed stage for the same reason: a
+            # resumed job reruns them together against a fresh cutoff.
+            run_started_at = datetime.now(timezone.utc).isoformat()
+            _run_resolution(db, domain_id, workers)
+            control.progress("netblock sweep", domain)
+            _run_netblock_sweep(
+                db,
+                domain,
+                domain_id,
+                netblock_sweep,
+                netblock_sweep_max_addresses,
+                netblock_sweep_resolvers,
+                netblock_sweep_workers,
+            )
+            _run_resolution(db, domain_id, workers)  # forward-resolve any netblock-swept hostnames too
+            # Prune before enrichment so stages don't waste work on IPs that DNS
+            # no longer points to (and that revalidation is about to remove).
+            if resume:
+                _revalidate(db, domain_id, domain, run_started_at)
+
+        stage("resolution", resolve_and_sweep)
+        stage(
+            "enrichment",
+            lambda: _run_enrichment_with_feedback(
+                db, enrich_sources, domain, domain_id, workers, governor, targets
+            ),
         )
-        _end_stage(control)
-        control.progress("subdomain takeover", domain)
-        _run_takeover(db, domain, domain_id, takeover_scan, takeover_scanner)
-        _end_stage(control)
-        control.progress("cloud scan", domain)
-        _run_artifact_scan(db, domain, domain_id, cloud_scan, trivy, checkov, cloudscan_config)
-        _end_stage(control)
-        control.progress("cloud audit", domain)
-        _run_cloud_audit(
-            db, domain, domain_id, cloud_audit, prowler, scoutsuite, cloudscan_config.providers
+        stage(
+            "fingerprint",
+            lambda: _run_tech_fingerprint(
+                db, domain_id, tech_fingerprint, fingerprinter, workers, ck
+            ),
         )
+        # Before the CVE lookup, which also looks up the PHP versions it reads.
+        stage(
+            "php2shell check",
+            lambda: _run_php2shell(db, domain_id, php2shell_scan, php2shell_scanner, ck),
+        )
+        stage(
+            "vulnerability lookup",
+            lambda: _run_vulnerability_lookup(
+                db, domain_id, vuln_lookup, nvd_client, exploit_client, ck
+            ),
+        )
+        stage("nuclei", lambda: _run_nuclei(db, domain_id, nuclei_scan, nuclei_scanner, ck))
+        stage(
+            "web app scan",
+            lambda: _run_web_app_scan(
+                db, domain_id, nikto_scan, wpscan_scan, nikto_scanner, wpscan_scanner, ck
+            ),
+        )
+        stage(
+            "subdomain takeover",
+            lambda: _run_takeover(db, domain, domain_id, takeover_scan, takeover_scanner),
+        )
+        stage(
+            "cloud scan",
+            lambda: _run_artifact_scan(
+                db, domain, domain_id, cloud_scan, trivy, checkov, cloudscan_config, ck
+            ),
+        )
+        stage(
+            "cloud audit",
+            lambda: _run_cloud_audit(
+                db, domain, domain_id, cloud_audit, prowler, scoutsuite,
+                cloudscan_config.providers, ck,
+            ),
+        )
+        ck.mark("done")
         control.progress("done", domain)
     except ScanCancelled:
         logger.info("scan of %s cancelled", domain)
@@ -1518,6 +1776,7 @@ def run_scan(
     nikto_scan: bool = False,
     wpscan_scan: bool = False,
     takeover_scan: bool = False,
+    php2shell_scan: bool = True,
     webscan_config: WebScanConfig | None = None,
     cloud_scan: bool = False,
     cloud_audit: bool = False,
@@ -1527,9 +1786,14 @@ def run_scan(
     max_concurrent_domains: int = DEFAULT_MAX_CONCURRENT_DOMAINS,
     fresh: bool = False,
     control: ScanControl | None = None,
+    checkpoints: Checkpoints | None = None,
 ) -> None:
     """`fresh` ignores every source's TTL and re-queries targets it answered
-    for recently (budgets still apply) - see governor.py."""
+    for recently (budgets still apply) - see governor.py.
+
+    `checkpoints` ties the run to a scan job: finished work is recorded as it
+    goes, and a job run again with the same checkpoints (a resume) skips what
+    it already finished, including domains it queued itself."""
     # Global proxy from the Settings page; raises before anything is sent if
     # a configured proxy is unreachable.
     apply_settings(db)
@@ -1566,6 +1830,7 @@ def run_scan(
         api_token=webscan_config.wpscan_api_token, extra_args=webscan_config.wpscan_extra_args
     )
     takeover_scanner = TakeoverScanner(extra_args=webscan_config.takeover_extra_args)
+    php2shell_scanner = Php2ShellScanner(extra_args=webscan_config.phpcheck_extra_args)
     # Cloud/container/IaC scanners; each a no-op when its stage is disabled or
     # its binary isn't present. Built once and shared across the batch.
     cloudscan_config = cloudscan_config or CloudScanConfig()
@@ -1576,11 +1841,13 @@ def run_scan(
     # One shared, stateless fingerprinter for the whole batch (see its class
     # docstring) - built unconditionally; the stage no-ops when disabled.
     fingerprinter = WebTechFingerprinter()
-    governor = SourceGovernor(db, fresh=fresh)
+    checkpoints = checkpoints or Checkpoints()
+    governor = SourceGovernor(db, fresh=fresh, resume_since=checkpoints.since)
     control = control or ScanControl()
 
     normalized_domains = normalize_input_domains(domains)
-    targets = ScanTargets(normalized_domains)
+    normalized_domains += [d for d in checkpoints.domains() if d not in normalized_domains]
+    targets = ScanTargets(normalized_domains, checkpoints)
     with ThreadPoolExecutor(max_workers=max_concurrent_domains) as executor:
 
         def submit(domain: str):
@@ -1609,6 +1876,8 @@ def run_scan(
                 nikto_scanner,
                 wpscan_scanner,
                 takeover_scanner,
+                php2shell_scan,
+                php2shell_scanner,
                 cloud_scan,
                 cloud_audit,
                 trivy,
@@ -1619,6 +1888,7 @@ def run_scan(
                 governor,
                 control,
                 targets,
+                checkpoints,
             )
 
         pending = {submit(domain) for domain in normalized_domains}

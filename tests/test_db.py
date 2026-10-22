@@ -436,3 +436,36 @@ class TestDeleteDomain:
 
     def test_unknown_id_is_a_no_op(self, db):
         db.delete_domain(999)
+
+    def test_drops_the_domains_scan_checkpoints(self, db):
+        gone, *_ = self._seed(db)
+        db.add_scan_checkpoint("job1", "gone.com", "stage:discovery")
+        db.add_scan_checkpoint("job1", "kept.com", "stage:discovery")
+        db.delete_domain(gone)
+        assert [r["domain"] for r in db.list_scan_checkpoints("job1")] == ["kept.com"]
+
+
+class TestScanJobs:
+    def test_create_update_and_list(self, db):
+        db.create_scan_job("a", "example.com", "{}", "pending", "2026-01-01T00:00:00+00:00")
+        db.create_scan_job("b", "example.org", "{}", "pending", "2026-01-02T00:00:00+00:00")
+        db.update_scan_job("a", status="running", stage="enrichment", resumes=1)
+        assert [r["id"] for r in db.list_scan_jobs()] == ["b", "a"]
+        row = db.get_scan_job("a")
+        assert (row["status"], row["stage"], row["resumes"], row["domain"]) == (
+            "running", "enrichment", 1, "example.com"
+        )
+
+    def test_unknown_field_is_rejected(self, db):
+        db.create_scan_job("a", "example.com", "{}", "pending", "2026-01-01")
+        with pytest.raises(ValueError):
+            db.update_scan_job("a", nope=1)
+
+    def test_checkpoints_are_idempotent_and_per_job(self, db):
+        db.add_scan_checkpoint("a", "example.com", "stage:discovery")
+        db.add_scan_checkpoint("a", "example.com", "stage:discovery")
+        db.add_scan_checkpoint("b", "example.com", "stage:discovery")
+        assert len(db.list_scan_checkpoints("a")) == 1
+        db.delete_scan_checkpoints("a")
+        assert db.list_scan_checkpoints("a") == []
+        assert len(db.list_scan_checkpoints("b")) == 1

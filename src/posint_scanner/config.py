@@ -49,9 +49,9 @@ class NucleiConfig(BaseModel):
 
 
 class WebScanConfig(BaseModel):
-    """Nikto / WPScan / takeover settings (see webscan.py). Three independent,
-    opt-in active stages that scan the resolved web services and hostnames the
-    passive stages surfaced. Like nuclei, each is its own post-discovery stage
+    """Nikto / WPScan / takeover / php2shell-checker settings (see webscan.py).
+    Independent, opt-in active stages that scan the resolved web services and
+    hostnames the passive stages surfaced. Like nuclei, each is its own post-discovery stage
     rather than a registry source, so they share this section.
 
     `wpscan_api_token` (or OSINT_WPSCAN_API_TOKEN) unlocks WPScan's vulnerability
@@ -63,6 +63,7 @@ class WebScanConfig(BaseModel):
     nikto_extra_args: list[str] = Field(default_factory=list)
     wpscan_extra_args: list[str] = Field(default_factory=list)
     takeover_extra_args: list[str] = Field(default_factory=list)
+    phpcheck_extra_args: list[str] = Field(default_factory=list)
 
 
 class CloudScanConfig(BaseModel):

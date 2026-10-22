@@ -31,8 +31,8 @@ _NUCLEI_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info
 
 # Tools whose results are cloud/container/IaC findings (see cloudscan.py).
 _CLOUD_TOOLS = ("trivy", "checkov", "prowler", "scoutsuite")
-# Active web-app scanners whose IP results share the webscan finding shape.
-_WEB_TOOLS = ("nikto", "wpscan")
+# Web scanners whose IP results share the webscan finding shape.
+_WEB_TOOLS = ("nikto", "wpscan", "php2shell")
 
 
 def cloud_findings(results: list[dict]) -> list[dict]:

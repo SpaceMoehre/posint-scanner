@@ -16,6 +16,13 @@ across runs. Pacing is in-memory but shared process-wide (see pacing.py).
 
 Budgets count requests: each call, plus every extra request a call makes
 (a further page) via Source.extra_request(). TTL is per call and target.
+
+Resume: a governor built with `resume_since` (the first start of a scan job
+being resumed) also skips any call that succeeded since then, TTL or
+`fresh` notwithstanding - that job already stored its result. Discovery
+("domain") calls are exempt: their hostnames are only stored once every
+discovery source is done, so a call answered before an interruption may
+have stored nothing.
 """
 
 from __future__ import annotations
@@ -41,6 +48,9 @@ T = TypeVar("T")
 
 DAY = timedelta(days=1)
 MONTH = timedelta(days=30)
+# Ledger target types whose result is stored as soon as the call returns
+# (see the module docstring's "Resume").
+RESUMABLE_TARGET_TYPES = frozenset({"collect", "hostname", "ip"})
 
 
 def _utcnow() -> datetime:
@@ -60,9 +70,11 @@ class SourceGovernor:
         fresh: bool = False,
         now: Callable[[], datetime] = _utcnow,
         limiters: RateLimiters = DEFAULT_LIMITERS,
+        resume_since: str | None = None,
     ) -> None:
         self.db = db
         self.fresh = fresh
+        self.resume_since = datetime.fromisoformat(resume_since) if resume_since else None
         self._now = now
         self._limiters = limiters
         self._exhausted: set[str] = set()
@@ -116,12 +128,18 @@ class SourceGovernor:
         return True
 
     def _is_fresh(self, source: Source, target_type: str, target: str) -> bool:
-        if self.fresh or source.ttl_days <= 0:
+        resuming = self.resume_since is not None and target_type in RESUMABLE_TARGET_TYPES
+        if not resuming and (self.fresh or source.ttl_days <= 0):
             return False
         last = self.db.last_successful_source_call(source.name, target_type, target)
         if last is None:
             return False
-        return datetime.fromisoformat(last) > self._now() - timedelta(days=source.ttl_days)
+        last_at = datetime.fromisoformat(last)
+        if resuming and last_at >= self.resume_since:
+            return True  # already answered earlier in the job being resumed
+        if self.fresh or source.ttl_days <= 0:
+            return False
+        return last_at > self._now() - timedelta(days=source.ttl_days)
 
     def _reserve(self, source: Source, target_type: str, target: str) -> int | None:
         with _BUDGET_LOCK:

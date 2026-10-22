@@ -233,7 +233,7 @@ class TestReadPages:
         assert "virustotal" in r.text
         assert 'name="domain" value="brand.co.uk"' in r.text  # one-click scan form
         # the one-click scan runs the default stages, not a stripped-down scan
-        for stage in ("netblock_sweep", "vuln_lookup", "fingerprint"):
+        for stage in ("netblock_sweep", "vuln_lookup", "fingerprint", "php2shell"):
             assert f'name="{stage}" value="on"' in r.text
 
     def test_missing_ip_returns_404(self, client):
@@ -422,6 +422,97 @@ class TestScanProgressAndCancel:
     def test_cancel_unknown_job_is_404(self, tmp_path):
         client = TestClient(self._app(tmp_path))
         assert client.post("/scans/deadbeef/cancel").status_code == 404
+
+
+class TestScanResume:
+    """Jobs live in the DB, so a scan cut off by a restart can be resumed."""
+
+    def _interrupted_job(self, tmp_path, stage="enrichment"):
+        db_path = str(tmp_path / "s.db")
+        with Database(db_path) as db:
+            db.init_schema()
+            db.create_scan_job("job1", "example.com", '{"nuclei": true, "sources": ["crtsh"]}',
+                               "running", "2026-01-01T00:00:00+00:00")
+            db.update_scan_job("job1", stage=stage, started_at="2026-01-01T00:00:01+00:00")
+            db.add_scan_checkpoint("job1", "example.com", "stage:discovery")
+        return db_path
+
+    def _wait(self, client, job_id, wanted, timeout=5.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            status = client.get(f"/api/scans/{job_id}").json()["status"]
+            if status in wanted:
+                return status
+            time.sleep(0.02)
+        return client.get(f"/api/scans/{job_id}").json()["status"]
+
+    def test_job_running_at_shutdown_shows_as_interrupted(self, tmp_path):
+        db_path = self._interrupted_job(tmp_path)
+        client = TestClient(create_app(db_path=db_path, config_path=str(tmp_path / "none.yaml")))
+        job = client.get("/api/scans/job1").json()
+        assert (job["status"], job["stage"], job["resumable"]) == ("interrupted", "enrichment", True)
+        r = client.get("/")
+        assert 'action="/scans/job1/resume"' in r.text
+        with Database(db_path) as db:
+            assert db.get_scan_job("job1")["status"] == "interrupted"
+
+    def test_resume_reruns_the_job_with_its_options_and_checkpoints(self, tmp_path):
+        db_path = self._interrupted_job(tmp_path)
+        client = TestClient(create_app(db_path=db_path, config_path=str(tmp_path / "none.yaml")))
+        with patch("posint_scanner.web.scans.run_scan") as mock_run:
+            r = client.post("/scans/job1/resume", follow_redirects=False)
+            assert r.status_code == 303
+            assert self._wait(client, "job1", {"completed"}) == "completed"
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["nuclei_scan"] is True
+        assert {s.name for s in mock_run.call_args.args[2]} == {"crtsh"}
+        checkpoints = kwargs["checkpoints"]
+        assert checkpoints.job_id == "job1"
+        assert checkpoints.since == "2026-01-01T00:00:01+00:00"  # the first start, not now
+        assert checkpoints.done("example.com", "stage:discovery")
+        job = client.get("/api/scans/job1").json()
+        assert job["resumes"] == 1
+        with Database(db_path) as db:
+            assert db.get_scan_job("job1")["status"] == "completed"
+            assert db.list_scan_checkpoints("job1") == []  # finished: nothing to resume
+
+    def test_auto_resume_on_startup(self, tmp_path):
+        db_path = self._interrupted_job(tmp_path)
+        with patch("posint_scanner.web.scans.run_scan") as mock_run:
+            client = TestClient(create_app(db_path=db_path, resume_interrupted=True,
+                                           config_path=str(tmp_path / "none.yaml")))
+            assert self._wait(client, "job1", {"completed"}) == "completed"
+        mock_run.assert_called_once()
+
+    def test_running_or_finished_job_cant_be_resumed(self, tmp_path):
+        client = TestClient(create_app(db_path=str(tmp_path / "s.db"),
+                                       config_path=str(tmp_path / "none.yaml")))
+        with patch("posint_scanner.web.scans.run_scan"):
+            r = client.post("/scans", data={"domain": "example.com"}, follow_redirects=False)
+            job_id = r.headers["location"].rsplit("/", 1)[1]
+            assert self._wait(client, job_id, {"completed"}) == "completed"
+            assert client.post(f"/scans/{job_id}/resume").status_code == 409
+        assert client.post("/scans/deadbeef/resume").status_code == 404
+
+    def test_cancelled_job_keeps_checkpoints_and_can_be_resumed(self, tmp_path):
+        client = TestClient(create_app(db_path=str(tmp_path / "s.db"),
+                                       config_path=str(tmp_path / "none.yaml")))
+
+        def fake_run(db, domains, sources, control=None, checkpoints=None, **kw):
+            checkpoints.mark(domains[0], "stage:discovery")
+            deadline = time.time() + 5
+            while not control.cancelled() and time.time() < deadline:
+                time.sleep(0.02)
+
+        with patch("posint_scanner.web.scans.run_scan", side_effect=fake_run):
+            r = client.post("/scans", data={"domain": "example.com"}, follow_redirects=False)
+            job_id = r.headers["location"].rsplit("/", 1)[1]
+            self._wait(client, job_id, {"running"})
+            client.post(f"/scans/{job_id}/cancel")
+            assert self._wait(client, job_id, {"cancelled"}) == "cancelled"
+        with Database(str(tmp_path / "s.db")) as db:
+            assert len(db.list_scan_checkpoints(job_id)) == 1
+        assert 'action="/scans/' + job_id + '/resume"' in client.get(f"/scans/{job_id}").text
 
     def test_domain_page_shows_code_exposures_and_secret(self, seeded_db, tmp_path):
         with Database(seeded_db) as db:

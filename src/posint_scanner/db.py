@@ -24,6 +24,10 @@ Schema (documented in detail in SCHEMA.md):
                       tools' report files live here, never on disk
     settings       - key/value app settings edited in the web UI (see
                       settings.py)
+    scan_jobs      - the web UI's scan jobs, so they outlive the process and
+                      an interrupted one can be resumed
+    scan_checkpoints - the units of work (stages, per-target tool runs) a
+                      job already finished, which a resumed job skips
 """
 
 from __future__ import annotations
@@ -209,6 +213,28 @@ CREATE TABLE IF NOT EXISTS tool_outputs (
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scan_jobs (
+    id TEXT PRIMARY KEY,
+    domain TEXT NOT NULL,
+    options TEXT NOT NULL,         -- JSON: the web UI's ScanOptions
+    status TEXT NOT NULL,
+    stage TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    error TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,               -- first start; kept when the job is resumed
+    finished_at TEXT,
+    resumes INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS scan_checkpoints (
+    job_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    step TEXT NOT NULL,            -- 'stage:<name>', '<tool>:<target>', 'queued', 'done'
+    done_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, domain, step)
 );
 """
 
@@ -601,6 +627,8 @@ class Database:
                 "tool_outputs",
             ):
                 self.conn.execute(f"DELETE FROM {table} WHERE domain_id = ?", (domain_id,))
+            # A resumed job must redo this domain, not skip work whose data is gone.
+            self.conn.execute("DELETE FROM scan_checkpoints WHERE domain = ?", (row["name"],))
             self.conn.execute("DELETE FROM domains WHERE id = ?", (domain_id,))
         except Exception:
             self.conn.rollback()
@@ -896,6 +924,70 @@ class Database:
         return self.conn.execute(
             "SELECT * FROM tool_outputs WHERE id = ?", (output_id,)
         ).fetchone()
+
+    # -- scan jobs / checkpoints --------------------------------------------
+
+    _SCAN_JOB_FIELDS = (
+        "domain", "options", "status", "stage", "detail", "error", "created_at",
+        "started_at", "finished_at", "resumes",
+    )
+
+    @_locked
+    def create_scan_job(
+        self, job_id: str, domain: str, options: str, status: str, created_at: str
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO scan_jobs (id, domain, options, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (job_id, domain, options, status, created_at),
+        )
+        self.conn.commit()
+
+    @_locked
+    def update_scan_job(self, job_id: str, **fields: Any) -> None:
+        """Write just the given fields of a scan job."""
+        unknown = set(fields) - set(self._SCAN_JOB_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown scan job field(s): {sorted(unknown)}")
+        if not fields:
+            return
+        self.conn.execute(
+            f"UPDATE scan_jobs SET {', '.join(f'{c} = ?' for c in fields)} WHERE id = ?",
+            (*fields.values(), job_id),
+        )
+        self.conn.commit()
+
+    @_locked
+    def get_scan_job(self, job_id: str) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM scan_jobs WHERE id = ?", (job_id,)).fetchone()
+
+    @_locked
+    def list_scan_jobs(self, limit: int = 50) -> list[sqlite3.Row]:
+        """Most recent first."""
+        return self.conn.execute(
+            "SELECT * FROM scan_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+
+    @_locked
+    def add_scan_checkpoint(self, job_id: str, domain: str, step: str) -> None:
+        self.conn.execute(
+            "INSERT INTO scan_checkpoints (job_id, domain, step, done_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
+            (job_id, domain, step, _now()),
+        )
+        self.conn.commit()
+
+    @_locked
+    def list_scan_checkpoints(self, job_id: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT domain, step FROM scan_checkpoints WHERE job_id = ? ORDER BY done_at",
+            (job_id,),
+        ).fetchall()
+
+    @_locked
+    def delete_scan_checkpoints(self, job_id: str) -> None:
+        self.conn.execute("DELETE FROM scan_checkpoints WHERE job_id = ?", (job_id,))
+        self.conn.commit()
 
     @_locked
     def checkpoint(self) -> None:

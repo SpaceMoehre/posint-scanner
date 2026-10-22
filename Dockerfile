@@ -18,7 +18,8 @@
 # when absent.
 #
 # The optional web-app / takeover scanners (nikto/wpscan/takeover, for the
-# --nikto / --wpscan / --takeover stages) are installed too; set
+# --nikto / --wpscan / --takeover stages) are installed too, as is
+# php2shell-checker for --php2shell (INSTALL_PHPCHECK=false skips it); set
 # INSTALL_WEBSCAN=false to skip them. All are skipped gracefully at runtime
 # when absent.
 #
@@ -121,6 +122,23 @@ RUN if [ "$INSTALL_WEBSCAN" = "true" ]; then set -eux; \
       apt-get purge -y ruby-dev build-essential; \
       apt-get autoremove -y; \
       rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# openai/php2shell-checker for the opt-in --php2shell stage (skipped
+# gracefully at runtime when absent): a dependency-free Node script, pinned to
+# a commit and wrapped as `phpcheck`. Debian's Node 18 has the fetch/parseArgs
+# it uses. Set INSTALL_PHPCHECK=false to skip it.
+ARG INSTALL_PHPCHECK=true
+ARG PHPCHECK_COMMIT=40a4746ec4925d4d7510b99f9e134277918b1ac3
+RUN if [ "$INSTALL_PHPCHECK" = "true" ]; then set -eux; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends nodejs; \
+      rm -rf /var/lib/apt/lists/*; \
+      git clone https://github.com/openai/php2shell-checker.git /opt/php2shell-checker; \
+      git -C /opt/php2shell-checker checkout --quiet "$PHPCHECK_COMMIT"; \
+      rm -rf /opt/php2shell-checker/.git; \
+      printf '#!/bin/sh\nexec node /opt/php2shell-checker/phpcheck.js "$@"\n' > /usr/local/bin/phpcheck; \
+      chmod +x /usr/local/bin/phpcheck; \
     fi
 
 # Vulnerability DBs trivy and wpscan scan with, downloaded once here into a

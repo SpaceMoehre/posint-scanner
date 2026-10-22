@@ -91,6 +91,27 @@ list, and can be stopped with a **Cancel** button - cancellation is
 cooperative (it stops at the next stage boundary) and keeps whatever was
 gathered so far.
 
+### Resuming interrupted scans
+
+Scan jobs are stored in the DB, together with the work each has finished:
+every completed stage, the slow per-target runs inside a stage (fingerprint
+per service; php2shell, CVE lookup, nuclei, nikto and wpscan per IP; trivy
+per image/repo; prowler/scoutsuite per provider), every source call, and the
+TLD siblings it queued. A scan still running when the server stops
+(container restart, crash, `docker compose down`) shows up as
+**interrupted** and, by default, `serve` resumes it on the next start;
+`serve --no-resume` only lists it, with a **Resume** button. Cancelled and
+failed scans get the same button.
+
+A resumed scan continues where it stopped: finished stages and tool runs are
+skipped, source calls answered earlier in the job aren't repeated (no API
+credits spent twice, even with *fresh*), and only the unit of work that was
+cut off is redone. Two exceptions run again in full when cut off midway:
+discovery (its hostnames are stored only once every discovery source is done)
+and the resolution + netblock sweep stage (its stale-mapping pruning needs a
+complete pass). Hostnames enrichment would have related to an already-answered
+call are not chased again. Once a job completes, its checkpoints are dropped.
+
 The dashboard can **delete** a domain with everything scanned for it (IPs
 another domain still resolves to are kept; refused while a scan runs), and
 **download everything** (or the selected domains) as one zip: `results.json`,
@@ -122,7 +143,7 @@ through it) without saving or activating it.
 - DNS: sent over TCP through the proxy to a configurable DNS server
   (default `1.1.1.1`); UDP DNS is blocked.
 - Skipped while proxied (can't be tunnelled): ping (ICMP), Nikto, takeover,
-  theHarvester.
+  theHarvester, php2shell-checker.
 
 ### Docker
 
@@ -314,8 +335,8 @@ see `config.example.yaml`.
 
 ## Web app & subdomain-takeover scans
 
-Three more opt-in active stages, each a thin wrapper around a dedicated tool
-(gracefully skipped when its binary isn't on `PATH`):
+Four more stages, each a thin wrapper around a dedicated tool (gracefully
+skipped when its binary isn't on `PATH`):
 
 - **`--nikto`** runs the [Nikto](https://github.com/sullo/nikto) web-server
   scanner against every resolved web service (dangerous files, outdated
@@ -330,15 +351,30 @@ Three more opt-in active stages, each a thin wrapper around a dedicated tool
   `can-i-take-over-xyz` fingerprints. This is the subdomain-takeover capability
   [Sn1per](https://github.com/1N3/Sn1per) would otherwise add - takeover covers
   it without pulling in Sn1per's root-hungry, pipeline-overlapping framework.
+- **php2shell** (on by default; `--no-php2shell` or the dashboard box turns it
+  off, and it follows `--no-active` / `defaults.active` like the tech
+  fingerprint) runs
+  [php2shell-checker](https://github.com/openai/php2shell-checker) against
+  every web service: one `HEAD` request reading the PHP version from
+  `X-Powered-By` / `Server`, flagged *critical* when it's at or below the
+  php2shell fix for its branch. Every disclosed stable PHP version is also
+  looked up in NVD (`cpe:2.3:a:php:php:<version>`, distro suffixes like
+  `-1ubuntu1` stripped) by the CVE lookup that runs right after - so this stage
+  adds PHP CVEs even where the fingerprint stage didn't see the version.
+  Needs Node.js and a `phpcheck` wrapper on `PATH`
+  (`exec node /path/to/php2shell-checker/phpcheck.js "$@"`); the Docker image
+  ships both. TLS certificates aren't validated (self-signed and expired certs
+  are common on exactly the hosts worth checking), like the other scanners. A
+  hidden header means no finding - not that the host is patched.
 
 Unlike the Nuclei stage (which scans only fingerprint-*confirmed* URLs), the
 web-app scanners run against every resolved `host:port`. Nikto/WPScan findings
-are stored per IP and shown in a **Web app scan findings** table on the IP
-page; takeover findings are stored per hostname and shown in a **Subdomain
-takeover** table on the domain page. All flow into the JSON export. Every stage
-is active/intrusive, so off by default - enable per scan with the flag or the
-matching dashboard box (never remembered in localStorage), and only against
-hosts you are authorized to test. Configure under `webscan:` - see
+(and php2shell's) are stored per IP and shown in a **Web app scan findings**
+table on the IP page; takeover findings are stored per hostname and shown in a **Subdomain
+takeover** table on the domain page. All flow into the JSON export. Nikto,
+WPScan and takeover are active/intrusive, so off by default - enable per scan
+with the flag or the matching dashboard box (never remembered in
+localStorage), and only against hosts you are authorized to test. Configure under `webscan:` - see
 `config.example.yaml`.
 
 ## Export structure

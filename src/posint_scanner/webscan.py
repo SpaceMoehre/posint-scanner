@@ -1,5 +1,5 @@
-"""Active web-application & subdomain-takeover scanning via Nikto, WPScan and
-takeover.
+"""Active web-application & subdomain-takeover scanning via Nikto, WPScan,
+takeover and php2shell-checker.
 
 Three more binaries the pipeline wraps thinly (like nuclei.py / cloudscan.py):
 gracefully absent when not on PATH, each parses its own output into the shared
@@ -21,11 +21,19 @@ opt-in (off by default) and only for hosts you're authorized to test.
     `can-i-take-over-xyz` fingerprints for a dangling, claimable service. This
     is the subdomain-takeover capability Sn1per would otherwise provide.
 
+  * **php2shell-checker** (https://github.com/openai/php2shell-checker,
+    `phpcheck`) - reads the PHP version a web service discloses in its
+    `X-Powered-By` / `Server` headers (one HEAD request, GET only on 405/501)
+    and compares it to the php2shell fix cutoffs. Unlike the three above it
+    sends nothing crafted, so it isn't opt-in: like the tech fingerprint it
+    runs whenever active stages are enabled. The disclosed version also feeds
+    the CVE lookup (see orchestrator._php_cpe_checks).
+
 Findings reuse the cloudscan shape (a plain dict persisted as a generic result
 row, like nuclei's), with a couple of web-specific keys:
 
     {
-        "tool": "nikto" | "wpscan" | "takeover",
+        "tool": "nikto" | "wpscan" | "takeover" | "php2shell",
         "kind": "web" | "vulnerability" | "misconfig" | "info" | "takeover",
         "severity": "critical" | "high" | "medium" | "low" | "info" | "unknown",
         "id": "<test id / CVE / wpvulndb id / service>",
@@ -37,6 +45,9 @@ row, like nuclei's), with a couple of web-specific keys:
         "reference": "<url>" | None,
         "location": "<method + path / region>" | None,
     }
+
+php2shell findings also carry `php_version` (as disclosed) and
+`patch_status` (`vulnerable` | `ok` | `unknown`).
 
 Nikto and WPScan don't emit a severity of their own, so we assign a sensible
 default per finding kind (raised to `medium` when a finding carries a CVE).
@@ -63,6 +74,9 @@ logger = logging.getLogger(__name__)
 NIKTO_TIMEOUT_SECONDS = 900
 WPSCAN_TIMEOUT_SECONDS = 900
 TAKEOVER_TIMEOUT_SECONDS = 900
+# phpcheck's own per-request timeout, and our ceiling for the whole run.
+PHPCHECK_REQUEST_TIMEOUT_SECONDS = 10
+PHPCHECK_TIMEOUT_SECONDS = 60
 
 _CVE_RE = re.compile(r"CVE-\d{4}-\d+", re.IGNORECASE)
 
@@ -254,6 +268,47 @@ def parse_takeover(report: str) -> list[dict]:
     return findings
 
 
+_PHP2SHELL_SEVERITY = {"vulnerable": "critical", "ok": "info", "unknown": "unknown"}
+_PHP2SHELL_TITLE = {
+    "vulnerable": "PHP {v} is vulnerable to php2shell (at or below the fixed patch release)",
+    "ok": "PHP {v} disclosed in response headers (newer than the php2shell cutoff)",
+    "unknown": "PHP {v} disclosed; php2shell status unknown (branch not covered or prerelease)",
+}
+
+
+def parse_phpcheck(stdout: str, url: str) -> dict | None:
+    """One finding from `phpcheck <url> --json`, or None when the service
+    disclosed no PHP version (nothing to report - `unknown` without a version
+    says nothing about the target) or the output isn't its JSON report."""
+    try:
+        report = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else None
+    except ValueError:
+        return None
+    if not isinstance(report, dict):
+        return None
+    version = report.get("php_version")
+    if not isinstance(version, str) or not version:
+        return None
+    status = str(report.get("patch_status") or "unknown").lower()
+    if status not in _PHP2SHELL_SEVERITY:
+        status = "unknown"
+    return {
+        "tool": "php2shell",
+        "kind": "vulnerability" if status == "vulnerable" else "info",
+        "severity": _PHP2SHELL_SEVERITY[status],
+        "id": "php2shell",
+        "title": _PHP2SHELL_TITLE[status].format(v=version),
+        "resource": f"PHP {version}",
+        "url": url,
+        "target": url,
+        "cves": [],
+        "reference": "https://github.com/openai/php2shell-checker",
+        "location": "X-Powered-By / Server header",
+        "php_version": version,
+        "patch_status": status,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Binary wrappers - one shared instance per scan (like the cloudscan tools),
 # holding only read-only config. Every run returns findings or [] and never
@@ -379,3 +434,39 @@ class TakeoverScanner(_BinaryTool):
             findings = parse_takeover(out.read_text())
             toolrun.emit(report, "hostnames", findings, path=out)
             return findings
+
+
+class Php2ShellScanner(_BinaryTool):
+    """`phpcheck <url> --json` - one web service at a time. `phpcheck` is the
+    php2shell-checker CLI (`node phpcheck.js`, wrapped on PATH by the
+    Dockerfile). Only URLs that disclose a PHP version produce a finding."""
+
+    binary_name = "phpcheck"
+
+    def scan(self, urls: list[str], report: toolrun.ReportSink | None = None) -> list[dict]:
+        # Node's fetch ignores ALL_PROXY - it would connect directly.
+        if self._missing() or self._proxy_blocked():
+            return []
+        findings: list[dict] = []
+        for url in dict.fromkeys(u for u in urls if u):
+            findings += self._scan_one(url, report)
+        return findings
+
+    def _scan_one(self, url: str, report: toolrun.ReportSink | None) -> list[dict]:
+        args = [url, "--json", "--timeout", str(PHPCHECK_REQUEST_TIMEOUT_SECONDS), *self.extra_args]
+        with toolrun.workspace("phpcheck") as workspace:
+            # Don't validate TLS: self-signed/expired certs are common on the
+            # hosts worth checking, and we only read headers. Node's fetch has
+            # no flag for it - this env var is its documented switch.
+            proc = self._run(
+                args, PHPCHECK_TIMEOUT_SECONDS, workspace,
+                env={"NODE_TLS_REJECT_UNAUTHORIZED": "0"},
+            )
+        # Exit 1 (vulnerable) and 3 (unknown) are verdicts, not failures; 2 is
+        # a usage error, which leaves no JSON on stdout.
+        if proc is None or not proc.stdout:
+            return []
+        finding = parse_phpcheck(proc.stdout, url)
+        findings = [finding] if finding else []
+        toolrun.emit(report, url, findings, text=proc.stdout)
+        return findings

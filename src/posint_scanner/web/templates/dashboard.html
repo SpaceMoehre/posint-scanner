@@ -34,6 +34,7 @@
       <label title="Active: the Nikto web-server scanner against every resolved web service. Needs the nikto binary. Only for hosts you're authorized to test."><input type="checkbox" name="nikto"> nikto scan (active)</label>
       <label title="Active: WPScan against every resolved web service (a fast no-op on non-WordPress sites). Needs the wpscan binary; set webscan.wpscan_api_token for CVE data."><input type="checkbox" name="wpscan"> wpscan (active)</label>
       <label title="Check every discovered hostname for a dangling, claimable service (subdomain takeover). Needs the takeover binary."><input type="checkbox" name="takeover"> subdomain takeover</label>
+      <label title="Read the PHP version each web service discloses in its headers (openai/php2shell-checker, one HEAD request each), flag php2shell-vulnerable versions and look up the version's CVEs. Needs the phpcheck wrapper."><input type="checkbox" name="php2shell"{% if active_default %} checked{% endif %}> php2shell check</label>
       <label title="Credential-free: Checkov + Trivy on the public GitHub repos and container images found for this domain. Needs the trivy/checkov binaries."><input type="checkbox" name="cloud_scan"> cloud artifact scan (trivy/checkov)</label>
       <label title="Authenticated: Prowler + ScoutSuite against the configured cloud providers, using your environment credentials. Only for accounts you're authorized to audit. Needs the prowler/scout binaries."><input type="checkbox" name="cloud_audit"> cloud account audit (prowler/scoutsuite)</label>
       <label><input type="checkbox" name="fresh"> fresh (ignore source TTLs)</label>
@@ -130,11 +131,12 @@ document.querySelectorAll("form.delete").forEach(f => f.addEventListener("submit
   <tr>
     <td>{{ j.domain }}</td>
     <td class="st st-{{ j.status }}">{{ j.status }}</td>
-    <td class="muted">{% if j.status in ("running", "pending", "cancelling") %}{{ j.stage or "…" }}{% else %}-{% endif %}</td>
+    <td class="muted">{% if j.status in ("running", "pending", "cancelling", "interrupted") %}{{ j.stage or "…" }}{% else %}-{% endif %}</td>
     <td class="muted">{{ j.started_at or j.created_at }}</td>
-    <td><a href="/scans/{{ j.id }}">details</a></td>
+    <td><a href="/scans/{{ j.id }}">details</a>
+      {% if j.resumable %}<form class="inline" method="post" action="/scans/{{ j.id }}/resume" style="display:inline"><button type="submit">Resume</button></form>{% endif %}</td>
   </tr>
   {% endfor %}
 </table>
-{% else %}<p class="muted">No scans this session.</p>{% endif %}
+{% else %}<p class="muted">No scans yet.</p>{% endif %}
 {% endblock %}

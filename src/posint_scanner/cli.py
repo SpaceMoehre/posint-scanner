@@ -268,6 +268,18 @@ def scan(
             "`takeover` binary, skipped if absent)."
         ),
     ),
+    php2shell: Optional[bool] = typer.Option(
+        None,
+        "--php2shell/--no-php2shell",
+        help=(
+            "Read the PHP version each web service discloses in its headers "
+            "with openai/php2shell-checker (one HEAD request per service; needs "
+            "the `phpcheck` wrapper, skipped if absent), flag versions "
+            "vulnerable to php2shell, and look up the version's CVEs. Connects "
+            "to the target, so like --fingerprint it follows --no-active / "
+            "config `defaults: {active: ...}` (on by default) unless set explicitly."
+        ),
+    ),
     cloud_scan: bool = typer.Option(
         False,
         "--cloud-scan",
@@ -340,8 +352,11 @@ def scan(
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1)
+    active_default = selection.categories.get("active", config.defaults.active)
     if fingerprint is None:
-        fingerprint = selection.categories.get("active", config.defaults.active)
+        fingerprint = active_default
+    if php2shell is None:
+        php2shell = active_default
     source_filter = [name.strip() for name in sources.split(",")] if sources else None
 
     with Database(db_path) as db:
@@ -362,6 +377,7 @@ def scan(
             nikto_scan=nikto,
             wpscan_scan=wpscan,
             takeover_scan=takeover,
+            php2shell_scan=php2shell,
             webscan_config=config.webscan,
             cloud_scan=cloud_scan,
             cloud_audit=cloud_audit,
@@ -414,6 +430,15 @@ def serve(
         ),
     ),
     port: int = typer.Option(8000, "--port", help="Port to listen on."),
+    resume: bool = typer.Option(
+        True,
+        "--resume/--no-resume",
+        help=(
+            "Resume scans that were still running when the server last stopped "
+            "(container restart, crash), continuing where each left off. With "
+            "--no-resume they're listed as interrupted, to resume from the UI."
+        ),
+    ),
 ) -> None:
     """Launch the browser UI to start scans and read reports.
 
@@ -431,7 +456,7 @@ def serve(
         )
         raise typer.Exit(code=1)
 
-    application = create_app(db_path=db_path, config_path=config_path)
+    application = create_app(db_path=db_path, config_path=config_path, resume_interrupted=resume)
     typer.echo(f"posint-scanner UI on http://{host}:{port}  (db: {db_path})")
     uvicorn.run(application, host=host, port=port)
 

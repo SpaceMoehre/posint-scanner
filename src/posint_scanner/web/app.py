@@ -45,12 +45,21 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _REPORT_EXTENSIONS = {"nuclei": "jsonl", "trufflehog": "jsonl", "scoutsuite": "js"}
 
 
-def create_app(db_path: str = "posint.db", config_path: str = "config.yaml") -> FastAPI:
+def create_app(
+    db_path: str = "posint.db",
+    config_path: str = "config.yaml",
+    resume_interrupted: bool = False,
+) -> FastAPI:
+    """`resume_interrupted` resumes scans the previous process was still
+    running when it ended (see web/scans.py)."""
     app = FastAPI(title="posint-scanner")
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
-    manager = ScanManager(db_path=db_path, config_path=config_path)
-    # Clears scratch dirs a killed earlier process left next to the DB.
+    # Clears scratch dirs a killed earlier process left next to the DB -
+    # before any interrupted scan resumes and starts using them.
     toolrun.configure(db_path)
+    manager = ScanManager(
+        db_path=db_path, config_path=config_path, resume_interrupted=resume_interrupted
+    )
 
     # One shared read connection; ensure the schema exists so pages render
     # (empty) even before the first scan has written anything.
@@ -88,6 +97,7 @@ def create_app(db_path: str = "posint.db", config_path: str = "config.yaml") -> 
         nikto: bool = Form(False),
         wpscan: bool = Form(False),
         takeover: bool = Form(False),
+        php2shell: bool = Form(False),
         cloud_scan: bool = Form(False),
         cloud_audit: bool = Form(False),
         fresh: bool = Form(False),
@@ -107,6 +117,7 @@ def create_app(db_path: str = "posint.db", config_path: str = "config.yaml") -> 
             nikto=nikto,
             wpscan=wpscan,
             takeover=takeover,
+            php2shell=php2shell,
             cloud_scan=cloud_scan,
             cloud_audit=cloud_audit,
             fresh=fresh,
@@ -125,6 +136,22 @@ def create_app(db_path: str = "posint.db", config_path: str = "config.yaml") -> 
     def cancel_scan(job_id: str):
         if manager.cancel(job_id) is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+        return RedirectResponse(f"/scans/{job_id}", status_code=303)
+
+    @app.post("/scans/{job_id}/resume", response_model=None)
+    def resume_scan(request: Request, job_id: str):
+        job = manager.get(job_id)
+        if job is None:
+            return page("not_found.html", request, status_code=404, what=f"scan {job_id}")
+        if manager.resume(job_id) is None:
+            return page(
+                "message.html",
+                request,
+                status_code=409,
+                heading="Can't resume",
+                message=f"The scan of {job.domain} is {job.status} - only interrupted, "
+                "cancelled or failed scans can be resumed.",
+            )
         return RedirectResponse(f"/scans/{job_id}", status_code=303)
 
     @app.get("/api/scans/{job_id}")

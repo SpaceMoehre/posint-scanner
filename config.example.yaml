@@ -145,6 +145,7 @@ webscan:
   # nikto_extra_args: []       # e.g. ["-Tuning", "x6"]
   # wpscan_extra_args: []      # e.g. ["--plugins-detection", "aggressive"]
   # takeover_extra_args: []
+  # phpcheck_extra_args: []    # php2shell-checker (--php2shell)
 
 cloudscan:
   # Detailed cloud scanning with Trivy, Checkov, Prowler and ScoutSuite. Two

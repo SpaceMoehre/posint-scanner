@@ -65,7 +65,7 @@
 
 {% if ip.web_findings %}
 <h2>Web app scan findings ({{ ip.web_findings|length }})</h2>
-<p class="note">Active findings from Nikto / WPScan against this host's web services. Confirmed by probing the target - only meaningful for hosts you're authorized to test.</p>
+<p class="note">Findings from Nikto / WPScan / php2shell-checker against this host's web services. Confirmed by probing the target - only meaningful for hosts you're authorized to test.</p>
 <table class="dt">
   <thead><tr><th data-filter="select">Severity</th><th data-filter="select">Tool</th><th>Check</th><th>Finding</th><th>Where</th><th>CVE</th></tr></thead>
   <tbody>
