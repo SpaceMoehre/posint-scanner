@@ -36,7 +36,15 @@ from posint_scanner.config import load_config
 from posint_scanner.db import Database
 from posint_scanner.export.zip_export import write_zip
 from posint_scanner.registry import describe_sources
-from posint_scanner.settings import AppSettings, load_settings, save_settings
+from posint_scanner.settings import (
+    AppSettings,
+    apply_source_secrets,
+    load_settings,
+    save_source_secrets,
+    save_settings,
+    source_key_groups,
+    source_secret_fields,
+)
 from posint_scanner.web import views
 from posint_scanner.web.scans import ScanManager, ScanOptions
 
@@ -74,6 +82,10 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request) -> HTMLResponse:
         config = load_config(config_path)
+        # Fold in web-UI keys so registry sources show their true configured
+        # state here (NVD/WPScan aren't registry sources - their status shows
+        # on the Settings page instead).
+        apply_source_secrets(config, db)
         return page(
             "dashboard.html",
             request,
@@ -213,7 +225,8 @@ def create_app(
 
     def settings_page(request: Request, form: dict, status_code: int = 200, **ctx) -> HTMLResponse:
         return page("settings.html", request, status_code=status_code, form=form,
-                     default_dns=proxy.DEFAULT_DNS_SERVER, **ctx)
+                     default_dns=proxy.DEFAULT_DNS_SERVER,
+                     source_keys=source_key_groups(db), **ctx)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_view(request: Request) -> HTMLResponse:
@@ -258,6 +271,27 @@ def create_app(
             return settings_page(request, form, status_code=400, error="enter a proxy to test.")
         checks = proxy.verify_proxy(proxy.parse_proxy_url(settings.proxy_url, settings.proxy_dns_server))
         return settings_page(request, form, checks=checks)
+
+    @app.post("/settings/keys", response_class=HTMLResponse)
+    async def settings_keys_save(request: Request) -> HTMLResponse:
+        proxy_form = load_settings(db).model_dump()
+        if manager.busy():
+            # A running scan has already built its sources from the old keys.
+            return settings_page(request, proxy_form, status_code=409,
+                                 keys_error="a scan is running - try again once it finishes.")
+        form = await request.form()
+        # A blank field is left untouched (keep the stored key); a value sets
+        # it; the field's "clear" checkbox removes it. Fields aren't prefilled,
+        # so a plain save never has to re-send - or expose - existing secrets.
+        values: dict[str, dict[str, str | None]] = {}
+        for source, field in source_secret_fields():
+            name = f"source.{source}.{field}"
+            if form.get(f"clear.{name}"):
+                values.setdefault(source, {})[field] = None
+            elif (raw := form.get(name)) is not None and str(raw).strip():
+                values.setdefault(source, {})[field] = str(raw)
+        save_source_secrets(db, values)
+        return settings_page(request, proxy_form, keys_saved=True)
 
     @app.get("/overview", response_class=HTMLResponse)
     def overview(request: Request, domain: str | None = None) -> HTMLResponse:

@@ -31,6 +31,7 @@ from posint_scanner.config import load_config
 from posint_scanner.db import Database
 from posint_scanner.orchestrator import Checkpoints, ScanControl, run_scan
 from posint_scanner.registry import SOURCE_CLASSES, SourceSelection, build_sources
+from posint_scanner.settings import apply_source_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -248,18 +249,19 @@ class ScanManager:
         try:
             config = load_config(self.config_path)
             opts = job.options
-            sources = build_sources(
-                config,
-                opts.selection(),
-                overrides=(
-                    {"qualys_vmdr": {"authorize_scans": True}} if opts.authorize_scans else None
-                ),
-            )
             # The worker's own connection (see module docstring). check_same_thread
             # is already off in Database, but a fresh one keeps the scan's long
             # write lock off the connection the UI reads from.
             with Database(self.db_path) as db:
                 db.init_schema()
+                apply_source_secrets(config, db)  # web-UI API keys, if any
+                sources = build_sources(
+                    config,
+                    opts.selection(),
+                    overrides=(
+                        {"qualys_vmdr": {"authorize_scans": True}} if opts.authorize_scans else None
+                    ),
+                )
                 run_scan(
                     db,
                     [job.domain],

@@ -11,6 +11,7 @@ import typer
 
 from posint_scanner import toolrun
 from posint_scanner.config import load_config
+from posint_scanner.settings import apply_source_secrets
 from posint_scanner.db import Database
 from posint_scanner.export.csv_export import write_csv
 from posint_scanner.export.json_export import write_json
@@ -343,6 +344,11 @@ def scan(
         selection.enable.add("shodan_web")
 
     config = load_config(config_path)
+    # Credentials set from the web Settings page live in the scan DB; fold
+    # them into the config so a CLI scan against the same DB uses them too.
+    with Database(db_path) as _db:
+        _db.init_schema()
+        apply_source_secrets(config, _db)
     try:
         all_sources = build_sources(
             config,

@@ -41,4 +41,37 @@
     Credentials go in the URL (<code>socks5h://user:pass@host:port</code>) and are stored in plain text in the DB.
   </p>
 </div>
+
+<h2>API keys &amp; credentials</h2>
+{% if keys_error %}<div class="card" style="border-color: var(--crit)"><span class="sev sev-CRITICAL">Not saved:</span> {{ keys_error }}</div>{% endif %}
+{% if keys_saved %}<div class="card" style="border-color: var(--low)"><span class="sev sev-LOW">Saved.</span> Applied at the start of every scan (web or CLI) against this database.</div>{% endif %}
+<div class="card">
+  <form class="scan" method="post" action="/settings/keys">
+    <p class="note" style="margin-top:0">
+      Per-source credentials, used when a source has no key set in <code>config.yaml</code> or the environment
+      (an <code>OSINT_&lt;SOURCE&gt;_&lt;FIELD&gt;</code> env var still wins over what you enter here).
+      Stored values are never shown back; leave a field blank to keep it, type to replace it, or tick <em>clear</em> to remove it.
+      A source with no credential is skipped at scan time. Stored in plain text in the scan database.
+    </p>
+    <table>
+      {% for group in source_keys %}
+      <tr><td colspan="2"><strong>{{ group.source }}</strong></td></tr>
+      {% for f in group.fields %}
+      <tr>
+        <td><label for="{{ f.name }}">{{ f.label }}</label></td>
+        <td>
+          <input type="password" id="{{ f.name }}" name="{{ f.name }}" value=""
+                 autocomplete="off" style="min-width: 420px"
+                 placeholder="{{ 'configured - blank keeps it' if f.configured else 'not set' }}">
+          {% if f.configured %}
+          <label class="muted" style="margin-left:.5em"><input type="checkbox" name="clear.{{ f.name }}"> clear</label>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      {% endfor %}
+    </table>
+    <button type="submit">Save keys</button>
+  </form>
+</div>
 {% endblock %}

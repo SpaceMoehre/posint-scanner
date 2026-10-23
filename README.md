@@ -145,6 +145,17 @@ through it) without saving or activating it.
 - Skipped while proxied (can't be tunnelled): ping (ICMP), Nikto, takeover,
   theHarvester, php2shell-checker.
 
+### Settings: API keys
+
+The **Settings** page also sets per-source API keys and credentials
+(Shodan/Censys/LeakIX/… keys, the NVD key, the WPScan token) without touching
+`config.yaml`. Stored in the DB, they apply to web and CLI scans against it,
+and are merged in only where a source isn't already keyed elsewhere -
+precedence is `OSINT_<SOURCE>_<FIELD>` env var > Settings page > config.yaml.
+Stored values are never shown back: leave a field blank to keep it, type to
+replace it, or tick **clear** to remove it. A source with no credential is
+skipped at scan time. Keys are stored in plain text in the scan database.
+
 ### Docker
 
 ```

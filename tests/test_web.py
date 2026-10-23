@@ -375,6 +375,25 @@ class TestScanLaunch:
             assert self._wait(client, r.headers["location"].rsplit("/", 1)[1]) == "completed"
         return {s.name for s in mock_run.call_args.args[2]}, mock_run.call_args.kwargs
 
+    def test_saved_api_key_reaches_built_source(self, tmp_path):
+        from posint_scanner.settings import save_source_secrets
+
+        db_path = tmp_path / "s.db"
+        with Database(db_path) as db:
+            db.init_schema()
+            save_source_secrets(db, {"shodan": {"api_key": "sk-fromdb"}})
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("")
+        app = create_app(db_path=str(db_path), config_path=str(config_path))
+        client = TestClient(app)
+        with patch("posint_scanner.web.scans.run_scan") as mock_run:
+            r = client.post("/scans", data={"domain": "example.com",
+                            "sources_form": "1", "source": ["shodan"]},
+                            follow_redirects=False)
+            assert self._wait(client, r.headers["location"].rsplit("/", 1)[1]) == "completed"
+        shodan = next(s for s in mock_run.call_args.args[2] if s.name == "shodan")
+        assert shodan.api_key == "sk-fromdb"
+
     def test_checked_sources_are_exactly_what_runs(self, tmp_path):
         names, _ = self._post(
             tmp_path, {"sources_form": "1", "source": ["crtsh", "shodan_web"]}
@@ -865,3 +884,38 @@ class TestSettings:
 
     def test_settings_page_has_test_button(self, client):
         assert 'formaction="/settings/test"' in client.get("/settings").text
+
+    def test_api_key_fields_rendered(self, client):
+        html = client.get("/settings").text
+        assert 'name="source.shodan.api_key"' in html
+        assert 'name="source.censys.api_secret"' in html
+        assert 'name="source.nvd.api_key"' in html
+
+    def test_saving_a_key_persists_without_echoing_it(self, client, seeded_db):
+        r = client.post("/settings/keys", data={"source.shodan.api_key": "sk-xyz"})
+        assert r.status_code == 200 and "Saved." in r.text
+        with Database(seeded_db) as db:
+            assert db.get_settings()["source.shodan.api_key"] == "sk-xyz"
+        page = client.get("/settings").text
+        assert "sk-xyz" not in page  # never echoed into the HTML
+        assert "configured - blank keeps it" in page  # but shown as set
+
+    def test_saved_key_makes_source_configured_on_dashboard(self, client):
+        before = client.get("/").text
+        client.post("/settings/keys", data={"source.shodan.api_key": "sk-xyz"})
+        after = client.get("/").text
+        # The dashboard reflects the stored key as a now-configured source.
+        assert before != after
+
+    def test_blank_submit_keeps_existing_key(self, client, seeded_db):
+        client.post("/settings/keys", data={"source.shodan.api_key": "sk-xyz"})
+        # Re-saving with the field blank must not wipe it.
+        client.post("/settings/keys", data={"source.shodan.api_key": ""})
+        with Database(seeded_db) as db:
+            assert db.get_settings()["source.shodan.api_key"] == "sk-xyz"
+
+    def test_clear_checkbox_removes_key(self, client, seeded_db):
+        client.post("/settings/keys", data={"source.shodan.api_key": "sk-xyz"})
+        client.post("/settings/keys", data={"clear.source.shodan.api_key": "on"})
+        with Database(seeded_db) as db:
+            assert "source.shodan.api_key" not in db.get_settings()
