@@ -62,9 +62,11 @@ def create_app(
     running when it ended (see web/scans.py)."""
     app = FastAPI(title="posint-scanner")
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
-    # Clears scratch dirs a killed earlier process left next to the DB -
-    # before any interrupted scan resumes and starts using them.
     toolrun.configure(db_path)
+    # Probe the tool sandbox now, so a missing one is logged at startup; every
+    # page shows it in a banner (base.html).
+    toolrun.sandbox_error()
+    templates.env.globals["sandbox_error"] = toolrun.sandbox_error
     manager = ScanManager(
         db_path=db_path, config_path=config_path, resume_interrupted=resume_interrupted
     )
@@ -102,6 +104,7 @@ def create_app(
         source: list[str] = Form([]),
         sources_form: bool = Form(False),
         authorize_scans: bool = Form(False),
+        verify_ports: bool = Form(False),
         fingerprint: bool = Form(False),
         netblock_sweep: bool = Form(False),
         vuln_lookup: bool = Form(False),
@@ -122,6 +125,7 @@ def create_app(
             # values means "none checked" rather than "not specified".
             sources=set(source) if sources_form else None,
             authorize_scans=authorize_scans,
+            verify_ports=verify_ports,
             fingerprint=fingerprint,
             netblock_sweep=netblock_sweep,
             vuln_lookup=vuln_lookup,

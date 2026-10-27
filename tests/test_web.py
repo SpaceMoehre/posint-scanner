@@ -297,7 +297,7 @@ class TestReadPages:
         assert "virustotal" in r.text
         assert 'name="domain" value="brand.co.uk"' in r.text  # one-click scan form
         # the one-click scan runs the default stages, not a stripped-down scan
-        for stage in ("netblock_sweep", "vuln_lookup", "fingerprint", "php2shell"):
+        for stage in ("netblock_sweep", "vuln_lookup", "verify_ports", "fingerprint", "php2shell"):
             assert f'name="{stage}" value="on"' in r.text
 
     def test_missing_ip_returns_404(self, client):

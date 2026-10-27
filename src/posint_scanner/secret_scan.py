@@ -15,7 +15,6 @@ import json
 import logging
 import math
 import re
-import shutil
 from dataclasses import dataclass
 
 from posint_scanner import toolrun
@@ -121,7 +120,7 @@ _gitleaks_missing_warned = False
 
 def _gitleaks(text: str, report: toolrun.ReportSink | None = None) -> list[SecretMatch]:
     global _gitleaks_missing_warned
-    binary = shutil.which("gitleaks")
+    binary = toolrun.which("gitleaks")
     if binary is None:
         if not _gitleaks_missing_warned:
             _gitleaks_missing_warned = True
@@ -160,7 +159,7 @@ _trufflehog_missing_warned = False
 
 def _trufflehog(text: str, report: toolrun.ReportSink | None = None) -> list[SecretMatch]:
     global _trufflehog_missing_warned
-    binary = shutil.which("trufflehog")
+    binary = toolrun.which("trufflehog")
     if binary is None:
         if not _trufflehog_missing_warned:
             _trufflehog_missing_warned = True

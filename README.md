@@ -39,13 +39,61 @@ A scan writes only to the database. Reports are produced on demand with
 `export` (`--format obsidian | json | csv`, see **Export structure** below) or
 the web UI's export zip.
 
-External tools (nikto, trivy, theHarvester, ...) run in private workspaces
-under `<db dir>/.posint-scratch/` that are deleted as soon as each tool
-exits; a run's raw report is stored lzma-compressed in the `tool_outputs`
-table (latest per domain, tool and target - a rescan replaces it, a run that
-finds nothing removes it) and is downloadable from the domain page. Each tool
-runs in its own process group, killed on timeout. Leftovers of a killed
-process are swept on the next scan or server start.
+External tools (nikto, trivy, theHarvester, ping, ...) run in throwaway
+sandboxes (see **Tool sandbox** below) that can't write to disk; a run's raw
+report is stored lzma-compressed in the `tool_outputs` table (latest per
+domain, tool and target - a rescan replaces it, a run that finds nothing
+removes it) and is downloadable from the domain page.
+
+### Tool sandbox
+
+Every external tool runs under [bubblewrap](https://github.com/containers/bubblewrap)
+(`bwrap`), so a tool can't leave files behind - however it misbehaves or
+gets killed:
+
+- `/` is read-only to the tool, the database's directory included;
+- `/tmp` is a fresh tmpfs holding its working dir, HOME and TMPDIR;
+- it has its own PID namespace. When the sandbox ends, the kernel kills
+  everything still running in it and frees the tmpfs, files left open
+  included. If the scanner itself is killed, its sandboxes die with it.
+
+A sandbox lives as long as one tool stage's workspace (a cloned repo stays
+for both checkov and trivy), and the scanner parses the report in it before
+it goes. At most 4 sandboxes run at once across every scan and process
+sharing a data dir (lock files in `<db dir>/.posint-slots/`); a stage waits
+for a free one. Each sandbox's tmpfs is in RAM and only takes what a tool
+writes. A tool pushing it past its caps is killed:
+
+```yaml
+sandbox:
+  size_mb: 1024       # per sandbox
+  max_inodes: 200000
+```
+
+ping, searchsploit and subfinder are small and frequent, so they run in
+one-shot sandboxes with a 16 MB tmpfs that don't count against the 4.
+
+Without a working bwrap no external tool runs: each stage is skipped as if
+its binary were missing, the log says why at startup, and the web UI shows a
+banner. Check a setup with:
+
+```
+posint-scanner sandbox-check --db /data/posint.db
+```
+
+In Docker, bwrap needs `security_opt: [seccomp=unconfined,
+apparmor=unconfined, systempaths=unconfined]` (already in
+`docker-compose.yml`; no capabilities are added). If `sandbox-check` still
+fails:
+
+- SELinux hosts: add `label=disable` to `security_opt`.
+- Hosts that restrict unprivileged user namespaces (Ubuntu 23.10+:
+  `kernel.apparmor_restrict_unprivileged_userns=1`), or kernels without
+  them: add `cap_add: [SYS_ADMIN]`. bwrap then works without a user
+  namespace. Tools still run with every capability dropped.
+
+The data dir and the tool cache must not be under `/tmp`, which the sandbox
+covers with its own tmpfs.
 
 trivy and wpscan scan against downloaded vulnerability DBs that a scan never
 updates. Fetch or refresh them (into `<db dir>/.posint-cache/`, or
@@ -163,8 +211,10 @@ docker compose up --build                # http://127.0.0.1:8000
 ```
 
 The SQLite DB and an optional `config.yaml` persist in `./data` (mounted at
-`/data`). The trivy/wpscan DBs are downloaded into the image at build time;
-rebuild to refresh them. API keys can go in `./data/config.yaml` or be
+`/data`). The trivy/wpscan DBs (~3GB) are downloaded into
+`./data/.posint-cache` on first start, which takes a few minutes; refresh them
+with `docker compose exec posint-scanner posint-scanner update-dbs --db
+/data/posint.db`. API keys can go in `./data/config.yaml` or be
 passed as `OSINT_*` env vars (uncomment `env_file` in `docker-compose.yml`).
 The compose port is pinned to `127.0.0.1:8000` for the same reason as above.
 
@@ -237,6 +287,19 @@ domains multiply those pools together - e.g. 4 domains simultaneously
 mid-netblock-sweep could mean up to `4 x 150` threads for that stage alone.
 Still cheap for threads that spend nearly all their time blocked on a
 socket, but worth knowing the shape of it before cranking every number up.
+
+## Port verification
+
+Shodan, Censys, LeakIX and the other enrichment sources report the ports
+their crawlers saw, sometimes months ago. Right after enrichment, `scan`
+TCP-connects every reported TCP port (no data sent; one retry) and removes
+the services that don't accept the connection, so fingerprinting, the CVE
+lookup and the scanners only work on ports open now. The sources' own
+reports stay in `results`, and each IP gets a `port_verify` result listing
+what was open and what was dropped. UDP services aren't checked. If no port
+at all answers, the scanner assumes its own connectivity is the problem and
+keeps everything. An active stage: on by default, `--no-verify-ports` (or
+`--no-active`) turns it off.
 
 ## Vulnerability lookup
 
@@ -343,7 +406,10 @@ Runs **Prowler** and **ScoutSuite** against the providers in
 from the ambient environment the usual way (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`,
 `~/.aws`, `gcloud`/`az` logins, `KUBECONFIG`, ...) - this tool never handles
 secrets itself. **Only for accounts you are authorized to audit.** Needs the
-`prowler` and/or `scout` binaries.
+`prowler` and/or `scout` binaries. In the tool sandbox HOME is a throwaway
+dir, so `~/.aws`, `~/.kube/config`, `~/.config/gcloud` and `~/.azure` are
+passed by their env vars (`AWS_CONFIG_FILE`, `KUBECONFIG`, ...) and are
+read-only: a login that must refresh tokens on disk won't persist them.
 
 Both stages are off by default; enable per scan with `--cloud-scan` /
 `--cloud-audit` (CLI) or the dashboard's *cloud artifact scan* / *cloud account
@@ -470,7 +536,8 @@ By default passive and active sources run and scrapers don't. Per source,
 most specific wins:
 
 1. `--source NAME` / `--no-source NAME` (repeatable)
-2. `--no-active` (also turns off the tech-fingerprint stage)
+2. `--no-active` (also turns off the port-verification and tech-fingerprint
+   stages)
 3. `sources: {NAME: {enabled: true|false}}` in config.yaml
 4. the source's own default (e.g. the `subdomainsfinder` stub is off)
 5. `defaults: {passive: true, scrape: false, active: true}` in config.yaml
@@ -526,7 +593,7 @@ run. `--fresh` (or the web UI's *fresh* box) ignores TTLs for one run.
 
 ## Configuration
 
-Every source lives under one `sources:` map; each field can also be set via
+`sandbox:` caps each tool sandbox (see **Tool sandbox**). Every source lives under one `sources:` map; each field can also be set via
 `OSINT_<SOURCE>_<FIELD>` (e.g. `OSINT_SHODAN_API_KEY`,
 `OSINT_SHODAN_WEB_ENABLED=true`). Old top-level sections (`shodan:`,
 `censys:`, `qualys_vmdr:`) keep working. See `config.example.yaml`.

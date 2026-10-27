@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import shutil
-import subprocess
-
-from posint_scanner import proxy
+from posint_scanner import proxy, toolrun
 from posint_scanner.models import DiscoveredHostname
 from posint_scanner.sources.base import Source, SourceUnavailableError
 
@@ -27,7 +24,7 @@ class SubfinderSource(Source):
     name = "subfinder"
 
     def discover(self, domain: str) -> list[DiscoveredHostname]:
-        binary_path = shutil.which(BINARY)
+        binary_path = toolrun.which(BINARY)
         if binary_path is None:
             raise SourceUnavailableError(
                 f"{BINARY} not found on PATH - install from "
@@ -36,11 +33,7 @@ class SubfinderSource(Source):
         cmd = [binary_path, "-d", domain, "-silent"]
         if proxy_url := proxy.tool_proxy_url():
             cmd += ["-proxy", proxy_url]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT_SECONDS,
-            check=False,
-        )
+        result = toolrun.run_light(cmd, timeout=TIMEOUT_SECONDS)
+        if result is None:
+            raise RuntimeError(f"{BINARY} did not finish (timed out or failed to start)")
         return parse_subfinder_output(result.stdout)

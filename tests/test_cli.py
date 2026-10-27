@@ -184,6 +184,7 @@ class TestSourceSelectionFlags:
         names, kwargs, _ = scan_with_real_registry(tmp_path)
         assert {"ping", "portscan", "crtsh", "shodan"} <= names
         assert "shodan_web" not in names
+        assert kwargs["verify_ports"] is True
         assert kwargs["tech_fingerprint"] is True
         assert kwargs["php2shell_scan"] is True
         assert kwargs["fresh"] is False
@@ -211,8 +212,13 @@ class TestSourceSelectionFlags:
         assert "ping" not in names
         assert "portscan" not in names
         assert "shodan" in names
+        assert kwargs["verify_ports"] is False
         assert kwargs["tech_fingerprint"] is False
         assert kwargs["php2shell_scan"] is False
+
+    def test_no_verify_ports_flag(self, tmp_path):
+        _, kwargs, _ = scan_with_real_registry(tmp_path, "--no-verify-ports")
+        assert kwargs["verify_ports"] is False
 
     def test_no_php2shell_flag(self, tmp_path):
         _, kwargs, _ = scan_with_real_registry(tmp_path, "--no-php2shell")

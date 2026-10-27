@@ -103,6 +103,15 @@ class CloudScanConfig(BaseModel):
     max_images: int = 25
 
 
+class SandboxConfig(BaseModel):
+    """Caps on each tool sandbox's tmpfs (see toolrun.py). It lives in RAM
+    (swappable), used only as far as a tool writes; at most 4 sandboxes exist
+    at once. A tool pushing past either cap is killed."""
+
+    size_mb: int = 1024
+    max_inodes: int = 200_000
+
+
 class CategoryDefaults(BaseModel):
     """Whether a source of each category runs when nothing more specific
     (config `enabled:`, CLI flag) says otherwise."""
@@ -119,6 +128,7 @@ class Config(BaseModel):
     nuclei: NucleiConfig = NucleiConfig()
     webscan: WebScanConfig = WebScanConfig()
     cloudscan: CloudScanConfig = CloudScanConfig()
+    sandbox: SandboxConfig = SandboxConfig()
 
     def source_settings(self, name: str, model: type[S]) -> S:
         """Resolve one source's settings: its config section, then any
@@ -133,7 +143,9 @@ class Config(BaseModel):
         return model(**raw)
 
 
-_RESERVED_TOP_LEVEL = {"defaults", "sources", "nvd", "nuclei", "webscan", "cloudscan"}
+_RESERVED_TOP_LEVEL = {
+    "defaults", "sources", "nvd", "nuclei", "webscan", "cloudscan", "sandbox",
+}
 
 
 def load_config(path: str | Path | None) -> Config:
@@ -152,7 +164,8 @@ def load_config(path: str | Path | None) -> Config:
         {"defaults": raw.get("defaults") or {}, "sources": sources,
          "nvd": raw.get("nvd") or {}, "nuclei": raw.get("nuclei") or {},
          "webscan": raw.get("webscan") or {},
-         "cloudscan": raw.get("cloudscan") or {}}
+         "cloudscan": raw.get("cloudscan") or {},
+         "sandbox": raw.get("sandbox") or {}}
     )
     nvd_key = os.environ.get("OSINT_NVD_API_KEY")
     if nvd_key:

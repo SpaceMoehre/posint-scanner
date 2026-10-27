@@ -42,7 +42,7 @@ class TestSubfinderSourceDiscover:
             "FakeCompleted", (), {"stdout": "api.example.com\n", "returncode": 0}
         )()
         with patch("shutil.which", return_value="/usr/bin/subfinder"):
-            with patch("subprocess.run", return_value=fake_completed) as mock_run:
+            with patch("posint_scanner.toolrun.run_light", return_value=fake_completed) as mock_run:
                 result = source.discover("example.com")
 
         assert [h.name for h in result] == ["api.example.com"]

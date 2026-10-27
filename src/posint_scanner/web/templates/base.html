@@ -57,6 +57,7 @@
     .st-cancelled { color: var(--crit); } .st-cancelling { color: var(--med); }
     .st-interrupted { color: var(--med); }
     .note { color: var(--muted); font-size: 13px; }
+    .banner { border-color: var(--crit); }
     /* table.dt: sortable/filterable (see script below) */
     .dt-wrap { overflow-x: auto; }
     .dt-bar { display: flex; gap: 10px; align-items: center; margin: 8px 0 0; font-size: 13px; }
@@ -197,6 +198,10 @@
       <a href="/settings">Settings</a>
     </nav>
   </header>
-  <main>{% block body %}{% endblock %}</main>
+  <main>
+    {% set sandbox_problem = sandbox_error() %}
+    {% if sandbox_problem %}<div class="card banner"><strong>Tool sandbox unavailable</strong> - every external tool (nuclei, nikto, trivy, ping, ...) is skipped: {{ sandbox_problem }}. Run <code>posint-scanner sandbox-check</code>; see the README's "Tool sandbox".</div>{% endif %}
+    {% block body %}{% endblock %}
+  </main>
 </body>
 </html>

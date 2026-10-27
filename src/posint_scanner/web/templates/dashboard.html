@@ -27,6 +27,7 @@
     {% endfor %}
     <div class="source-group">
       <span class="muted">stages:</span>
+      <label title="TCP-connect every port Shodan, Censys etc. reported and drop the ones that don't accept the connection."><input type="checkbox" name="verify_ports"{% if active_default %} checked{% endif %}> verify reported ports</label>
       <label><input type="checkbox" name="fingerprint"{% if active_default %} checked{% endif %}> tech fingerprint</label>
       <label><input type="checkbox" name="netblock_sweep" checked> netblock sweep</label>
       <label><input type="checkbox" name="vuln_lookup" checked> CVE lookup</label>

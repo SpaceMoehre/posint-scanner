@@ -269,7 +269,7 @@
         <input type="hidden" name="domain" value="{{ c.name }}">
         <input type="hidden" name="netblock_sweep" value="on">
         <input type="hidden" name="vuln_lookup" value="on">
-        {% if active_default %}<input type="hidden" name="fingerprint" value="on"><input type="hidden" name="php2shell" value="on">{% endif %}
+        {% if active_default %}<input type="hidden" name="verify_ports" value="on"><input type="hidden" name="fingerprint" value="on"><input type="hidden" name="php2shell" value="on">{% endif %}
         <button type="submit">Scan</button>
       </form>
     {% endif %}</td>

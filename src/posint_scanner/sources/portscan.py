@@ -26,6 +26,10 @@ from posint_scanner.sources.base import Source
 
 CONNECT_TIMEOUT_SECONDS = 1.5
 READ_TIMEOUT_SECONDS = 2.0
+# Verifying a reported port is one connect per port, so it can afford a
+# slower timeout than the sweep over COMMON_PORTS.
+VERIFY_TIMEOUT_SECONDS = 3.0
+VERIFY_ATTEMPTS = 2
 SCAN_WORKERS = 50
 # Process-wide cap on probes in flight (one socket each). Per-IP pools run
 # inside the enrichment pool, across concurrent domains and web UI scans, so
@@ -74,6 +78,22 @@ def _connect(ip: str, port: int) -> socket.socket | None:
         return proxy.create_connection((ip, port), timeout=CONNECT_TIMEOUT_SECONDS)
     except OSError:
         return None
+
+
+def tcp_connect(
+    ip: str, port: int, timeout: float = VERIFY_TIMEOUT_SECONDS, attempts: int = VERIFY_ATTEMPTS
+) -> bool:
+    """Whether a plain TCP connect to ip:port succeeds - no data sent. Used
+    to verify ports third-party sources (Shodan, Censys, ...) report; a
+    second attempt keeps one dropped SYN from counting as closed."""
+    for _ in range(attempts):
+        with _PROBE_SLOTS:
+            try:
+                proxy.create_connection((ip, port), timeout=timeout).close()
+                return True
+            except OSError:
+                pass
+    return False
 
 
 def probe_port(ip: str, port: int) -> tuple[bool, str | None]:

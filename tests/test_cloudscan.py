@@ -228,24 +228,24 @@ class TestHelpers:
 
 class TestScannersGracefulWhenAbsent:
     def test_trivy_absent(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         s = TrivyScanner()
         assert s.available is False
         assert s.scan_image("img") == []
         assert s.scan_fs("/path") == []
 
     def test_checkov_absent(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         assert CheckovScanner().scan_dir("/path") == []
 
     def test_prowler_absent(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         assert ProwlerScanner().scan("aws") == []
 
     def test_scoutsuite_absent(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         assert ScoutSuiteScanner().scan("aws") == []
 
     def test_clone_repo_without_git(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         assert clone_repo("https://github.com/x/y.git", "/tmp/nope") is False

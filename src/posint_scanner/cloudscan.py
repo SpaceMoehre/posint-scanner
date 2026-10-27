@@ -41,8 +41,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
-import shutil
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -306,7 +306,7 @@ class _BinaryTool:
     binary_name: str = ""
 
     def __init__(self, extra_args: list[str] | None = None) -> None:
-        self._binary = shutil.which(self.binary_name)
+        self._binary = toolrun.which(self.binary_name)
         self.extra_args = list(extra_args or [])
         self._warned = False
 
@@ -425,6 +425,29 @@ class CheckovScanner(_BinaryTool):
         return findings
 
 
+# Where the cloud CLIs look for credentials under HOME, by the env var that
+# overrides each. A sandboxed tool's HOME is the sandbox's own, so these point
+# it back at the real files (read-only to it).
+_HOME_CREDENTIALS = {
+    "AWS_SHARED_CREDENTIALS_FILE": ".aws/credentials",
+    "AWS_CONFIG_FILE": ".aws/config",
+    "KUBECONFIG": ".kube/config",
+    "CLOUDSDK_CONFIG": ".config/gcloud",
+    "AZURE_CONFIG_DIR": ".azure",
+}
+
+
+def ambient_credentials_env() -> dict[str, str]:
+    """Env vars pointing the cloud CLIs at the credentials in the real HOME,
+    for those not already set by the environment."""
+    home = Path.home()
+    return {
+        var: str(home / rel)
+        for var, rel in _HOME_CREDENTIALS.items()
+        if var not in os.environ and (home / rel).exists()
+    }
+
+
 class ProwlerScanner(_BinaryTool):
     """`prowler <provider>` - hundreds of cloud-security checks against an
     account you have credentials for. Reads credentials from the ambient
@@ -443,7 +466,9 @@ class ProwlerScanner(_BinaryTool):
                 "--output-filename", "prowler",
                 *self.extra_args,
             ]
-            proc = self._run(args, PROWLER_TIMEOUT_SECONDS, workspace)
+            proc = self._run(
+                args, PROWLER_TIMEOUT_SECONDS, workspace, env=ambient_credentials_env()
+            )
             if proc is None:
                 return []
             # Prefer the JSON file (stdout is a progress bar); fall back to
@@ -479,7 +504,9 @@ class ScoutSuiteScanner(_BinaryTool):
                 "--force",
                 *self.extra_args,
             ]
-            proc = self._run(args, SCOUTSUITE_TIMEOUT_SECONDS, workspace)
+            proc = self._run(
+                args, SCOUTSUITE_TIMEOUT_SECONDS, workspace, env=ambient_credentials_env()
+            )
             if proc is None:
                 return []
             for candidate in workspace.rglob("scoutsuite_results_*.js"):
@@ -503,7 +530,7 @@ def clone_repo(
     scanning. A clone growing past `max_bytes` on disk is killed. Returns
     whether it succeeded; a no-op False when `git` isn't installed. Never
     raises."""
-    git = shutil.which("git")
+    git = toolrun.which("git")
     if git is None:
         logger.warning("git not on PATH - cannot clone %s for scanning", url)
         return False

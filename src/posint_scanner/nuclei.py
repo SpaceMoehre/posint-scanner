@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 from pathlib import Path
 
 from posint_scanner import proxy, toolrun
@@ -72,7 +71,7 @@ class NucleiScanner:
     a batch of URLs, so there's no shared mutable state to lock."""
 
     def __init__(self, templates_dir: str | None = None, extra_args: list[str] | None = None) -> None:
-        self._binary = shutil.which("nuclei")
+        self._binary = toolrun.which("nuclei")
         self.templates_dir = templates_dir
         self.extra_args = list(extra_args or [])
         self._warned = False
@@ -113,17 +112,9 @@ class NucleiScanner:
             if proxy_url := proxy.tool_proxy_url():
                 cmd += ["-proxy", proxy_url]
             cmd += self.extra_args
-            # nuclei keeps config and resume files under HOME/XDG dirs; point
-            # them into the workspace so they go with it.
-            env = {
-                "HOME": str(workspace),
-                "XDG_CONFIG_HOME": str(workspace / ".config"),
-                "XDG_CACHE_HOME": str(workspace / ".cache"),
-                "XDG_DATA_HOME": str(workspace / ".local" / "share"),
-            }
-            proc = toolrun.run_tool(
-                cmd, timeout=NUCLEI_TIMEOUT_SECONDS, cwd=workspace, env=env
-            )
+            # nuclei keeps config and resume files under HOME/XDG dirs, which
+            # the sandbox points at its tmpfs.
+            proc = toolrun.run_tool(cmd, timeout=NUCLEI_TIMEOUT_SECONDS, cwd=workspace)
         if proc is None:
             return []
         findings = []
@@ -136,7 +127,7 @@ class NucleiScanner:
 
 
 def _default_templates_dir() -> str | None:
-    """nuclei's own template dir in the real home - found there before HOME
-    is pointed at the workspace."""
+    """nuclei's own template dir in the real home - looked up here, since a
+    sandboxed nuclei's HOME is the sandbox's own."""
     path = Path.home() / "nuclei-templates"
     return str(path) if path.is_dir() else None

@@ -280,7 +280,7 @@ class TestTools:
     def test_tools_get_proxy_flag(self, wpscan_db):
         proxy.configure("127.0.0.1:9050")
         with patch("shutil.which", return_value="/bin/x"), \
-             patch("subprocess.run") as run, \
+             patch("posint_scanner.toolrun.run_light") as run, \
              patch("posint_scanner.toolrun.run_tool") as tool_run:
             run.return_value.stdout = ""
             tool_run.return_value.stdout = ""
