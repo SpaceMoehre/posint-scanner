@@ -4,11 +4,11 @@
 <h1>Settings</h1>
 <p class="muted">Stored in the scan database; applied at the start of every scan (web or CLI).</p>
 
-{% if error %}<div class="card" style="border-color: var(--crit)"><span class="sev sev-CRITICAL">{{ "Not tested" if request.url.path.endswith("/test") else "Not saved" }}:</span> {{ error }}</div>{% endif %}
-{% if saved %}<div class="card" style="border-color: var(--low)"><span class="sev sev-LOW">Saved.</span>{% if warning %} <span class="sev sev-MEDIUM">{{ warning }}</span>{% endif %}</div>{% endif %}
+{% if error %}<div class="card err" role="alert"><span class="sev sev-CRITICAL">{{ "Not tested" if request.url.path.endswith("/test") else "Not saved" }}:</span> {{ error }}</div>{% endif %}
+{% if saved %}<div class="card ok" role="status"><span class="sev sev-LOW">Saved.</span>{% if warning %} <span class="sev sev-MEDIUM">{{ warning }}</span>{% endif %}</div>{% endif %}
 
 {% if checks %}
-<div class="card" style="border-color: {{ 'var(--low)' if checks|selectattr('ok')|list|length == checks|length else 'var(--crit)' }}">
+<div class="card {{ 'ok' if checks|selectattr('ok')|list|length == checks|length else 'err' }}" role="status">
   <strong>Proxy test{% if checks|selectattr('ok')|list|length == checks|length %}: working{% else %}: failed{% endif %}</strong> <span class="muted">(not saved)</span>
   <table>
     {% for c in checks %}
@@ -23,14 +23,14 @@
   <form class="scan" method="post" action="/settings">
     <p>
       <label for="proxy_url">SOCKS5 proxy</label><br>
-      <input type="text" id="proxy_url" name="proxy_url" value="{{ form.proxy_url or '' }}" placeholder="socks5h://127.0.0.1:9050" style="min-width: 420px">
+      <input type="text" id="proxy_url" name="proxy_url" value="{{ form.proxy_url or '' }}" placeholder="socks5h://127.0.0.1:9050" class="wide">
     </p>
     <p>
       <label for="proxy_dns_server">DNS server (queried through the proxy)</label><br>
       <input type="text" id="proxy_dns_server" name="proxy_dns_server" value="{{ form.proxy_dns_server or '' }}" placeholder="{{ default_dns }}">
     </p>
     <button type="submit">Save</button>
-    <button type="submit" formaction="/settings/test" style="background: var(--panel2); color: var(--fg); border: 1px solid var(--border)">Test proxy</button>
+    <button type="submit" formaction="/settings/test" class="secondary">Test proxy</button>
   </form>
   <p class="note">
     Leave the proxy empty to connect directly. When set, every connection a scan makes goes through it, or is not made:
@@ -43,8 +43,8 @@
 </div>
 
 <h2>API keys &amp; credentials</h2>
-{% if keys_error %}<div class="card" style="border-color: var(--crit)"><span class="sev sev-CRITICAL">Not saved:</span> {{ keys_error }}</div>{% endif %}
-{% if keys_saved %}<div class="card" style="border-color: var(--low)"><span class="sev sev-LOW">Saved.</span> Applied at the start of every scan (web or CLI) against this database.</div>{% endif %}
+{% if keys_error %}<div class="card err" role="alert"><span class="sev sev-CRITICAL">Not saved:</span> {{ keys_error }}</div>{% endif %}
+{% if keys_saved %}<div class="card ok" role="status"><span class="sev sev-LOW">Saved.</span> Applied at the start of every scan (web or CLI) against this database.</div>{% endif %}
 <div class="card">
   <form class="scan" method="post" action="/settings/keys">
     <p class="note" style="margin-top:0">
@@ -61,10 +61,10 @@
         <td><label for="{{ f.name }}">{{ f.label }}</label></td>
         <td>
           <input type="password" id="{{ f.name }}" name="{{ f.name }}" value=""
-                 autocomplete="off" style="min-width: 420px"
+                 autocomplete="off" class="wide"
                  placeholder="{{ 'configured - blank keeps it' if f.configured else 'not set' }}">
           {% if f.configured %}
-          <label class="muted" style="margin-left:.5em"><input type="checkbox" name="clear.{{ f.name }}"> clear</label>
+          <label class="muted"><input type="checkbox" name="clear.{{ f.name }}"> clear</label>
           {% endif %}
         </td>
       </tr>

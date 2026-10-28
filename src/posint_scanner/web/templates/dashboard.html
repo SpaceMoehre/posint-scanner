@@ -1,4 +1,20 @@
 {% extends "base.html" %}
+{% block head %}
+<style>
+  #domains td:nth-child(2), #domains td:nth-child(10) { white-space: nowrap; }
+  .scan-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  details.opts { margin-top: 12px; }
+  details.opts > summary { cursor: pointer; color: var(--muted); font-size: 14px; width: fit-content; }
+  details.opts > summary:hover { color: var(--fg); }
+  details.opts[open] > summary { margin-bottom: 8px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  .actions .sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
+  .live { display: flex; flex-direction: column; gap: 6px; }
+  .live a { display: flex; gap: 12px; align-items: baseline; color: var(--fg); }
+  .live a:hover { text-decoration: none; color: var(--link); }
+  .empty { text-align: center; padding: 28px 16px; }
+</style>
+{% endblock %}
 {% block body %}
 <h1>Dashboard</h1>
 
@@ -8,15 +24,17 @@
   <div class="stat"><div class="n">{{ data.total_ips }}</div><div class="l">IP addresses</div></div>
 </div>
 
-<h2>Start a scan</h2>
+<h2 id="scan">Start a scan</h2>
 <div class="card">
   <form class="scan" method="post" action="/scans">
-    <div style="margin-bottom:12px">
-      <input type="text" name="domain" placeholder="example.com" required autofocus>
+    <div class="scan-row">
+      <input type="text" name="domain" placeholder="example.com" aria-label="Domain to scan" required autofocus>
       <button type="submit">Scan</button>
-      <button type="button" id="select-all-opts" class="secondary">Select all options</button>
     </div>
     <input type="hidden" name="sources_form" value="1">
+    <details class="opts">
+    <summary>Sources &amp; stages · <span id="opts-count"></span></summary>
+    <p><button type="button" id="select-all-opts" class="secondary">Select all options</button></p>
     {% for category in ["passive", "scrape", "active"] %}
     <div class="source-group">
       <span class="muted">{{ category }}:</span>
@@ -40,6 +58,7 @@
       <label><input type="checkbox" name="fresh"> fresh (ignore source TTLs)</label>
       <label><input type="checkbox" name="authorize_scans"> authorize active Qualys scans</label>
     </div>
+    </details>
     <p class="note">Active stages connect directly to the target. Only scan infrastructure you are authorized to test. Re-scanning a known domain automatically revalidates it and prunes results that are no longer valid.</p>
   </form>
 </div>
@@ -70,27 +89,49 @@
 (function () {
   const btn = document.getElementById("select-all-opts");
   const boxes = () => [...document.querySelectorAll('form.scan input[type=checkbox]')];
+  const count = document.getElementById("opts-count");
+  const update = () => {
+    const on = boxes().filter(b => b.checked);
+    const active = on.filter(b => ["nuclei", "nikto", "wpscan", "takeover", "cloud_scan", "cloud_audit", "authorize_scans"].includes(b.name));
+    count.textContent = `${on.length} of ${boxes().length} selected` + (active.length ? ` (${active.length} intrusive)` : "");
+    btn.textContent = on.length === boxes().length ? "Clear all options" : "Select all options";
+  };
   btn.addEventListener("click", () => {
     const all = boxes().every(b => b.checked);
     boxes().forEach(b => { b.checked = !all; });
-    btn.textContent = all ? "Select all options" : "Clear all options";
+    update();
   });
+  document.querySelector("form.scan").addEventListener("change", update);
+  update();
 })();
 </script>
 
+{% set live = jobs|selectattr("status", "in", ["pending", "running", "cancelling", "interrupted"])|list %}
+{% if live %}
+<h2>Active scans ({{ live|length }})</h2>
+<div class="card live">
+  {% for j in live %}
+  <a href="/scans/{{ j.id }}"><strong>{{ j.domain }}</strong> <span class="st st-{{ j.status }}">{{ j.status }}</span> <span class="muted">{{ j.stage or "…" }}</span></a>
+  {% endfor %}
+</div>
+{% endif %}
+
 <h2>Domains</h2>
-{% if data.domains %}
-<form id="export" method="get" action="/export.zip">
-  <button type="submit">Export selected (zip)</button>
-  <span class="note">- JSON, CSV, Obsidian markdown vault and a copy of the database; nothing selected = everything</span>
-</form>
-<table class="dt">
-  <thead><tr><th data-filter="none"><input type="checkbox" id="export-all" title="select all"></th><th>Domain</th><th>Hostnames</th><th>IPs</th><th>Services</th><th>Exposures</th><th>CVEs</th><th>Critical</th><th>Secrets</th><th>Added</th><th data-filter="none"></th><th data-filter="none"></th></tr></thead>
-  <tbody>
-  {% for d in data.domains %}
-  <tr>
-    <td><input type="checkbox" form="export" name="domain" value="{{ d.name }}" class="export-sel"></td>
+{% macro domain_row(d, parent=None) %}
+  <tr{% if parent %} data-parent="{{ parent }}"{% endif %}>
+    <td><input type="checkbox" form="export" name="domain" value="{{ d.name }}" class="export-sel"{% if parent %} data-parent="{{ parent }}"{% endif %}></td>
     <td><a href="/domains/{{ d.name }}">{{ d.name }}</a></td>
+    {{ count_cells(d) }}
+    <td><a href="/overview?domain={{ d.name|urlencode }}">overview</a></td>
+    <td>
+      <form class="inline delete" method="post" action="/domains/{{ d.name|urlencode }}/delete"
+            data-confirm="Delete {{ d.name }} and everything scanned for it? This can't be undone.">
+        <button type="submit" class="danger-quiet" aria-label="Delete {{ d.name }}">Delete</button>
+      </form>
+    </td>
+  </tr>
+{% endmacro %}
+{% macro count_cells(d) %}
     <td>{{ d.hostname_count }}</td>
     <td>{{ d.ip_count }}</td>
     <td>{{ d.service_count }}</td>
@@ -99,24 +140,93 @@
     <td>{% if d.critical_count %}<span class="sev sev-CRITICAL">{{ d.critical_count }}</span>{% else %}0{% endif %}</td>
     <td>{% if d.secret_count %}<span class="sev sev-CRITICAL">{{ d.secret_count }}</span>{% else %}0{% endif %}</td>
     <td class="muted">{{ d.added_at[:10] }}</td>
-    <td><a href="/overview?domain={{ d.name|urlencode }}">overview</a></td>
-    <td>
-      <form class="inline delete" method="post" action="/domains/{{ d.name|urlencode }}/delete"
-            data-confirm="Delete {{ d.name }} and everything scanned for it? This can't be undone.">
-        <button type="submit" class="danger">Delete</button>
-      </form>
-    </td>
+{% endmacro %}
+{% if data.domains %}
+<form id="export" method="get" action="/export.zip">
+  <div class="actions">
+    <button type="submit" class="secondary" id="export-btn" title="JSON, CSV, Obsidian markdown vault and a copy of the database">Export all (zip)</button>
+    <span class="sep"></span>
+    <input type="text" name="group" list="group-names" maxlength="80" placeholder="group name" aria-label="Group name">
+    <datalist id="group-names">{% for n in data.group_names %}<option value="{{ n }}">{% endfor %}</datalist>
+    <button type="submit" class="secondary" formmethod="post" formaction="/domain-groups" data-needs-selection data-needs-name>Group</button>
+    <button type="submit" class="secondary" formmethod="post" formaction="/domain-groups/remove" data-needs-selection>Ungroup</button>
+    <span class="inline-msg" id="group-msg" role="status"></span>
+  </div>
+  <p class="note">Tick domains to export or group them. Domains with the same name under other TLDs are grouped automatically.</p>
+</form>
+<table class="dt" id="domains">
+  <thead><tr><th data-filter="none"><input type="checkbox" id="export-all" title="select all"></th><th>Domain</th><th>Hostnames</th><th>IPs</th><th>Services</th><th>Exposures</th><th>CVEs</th><th>Critical</th><th>Secrets</th><th>Added</th><th data-filter="none"></th><th data-filter="none"></th></tr></thead>
+  <tbody>
+  {% for e in data.entries %}
+  {% if e.members %}
+  <tr data-group="{{ e.key }}">
+    <td><input type="checkbox" class="group-sel" title="select the whole group"></td>
+    <td data-sort="{{ e.name }}"><button type="button" class="dt-toggle" aria-expanded="false">{{ e.name }}</button>
+      <span class="muted">{{ e.members|length }} {{ "TLDs" if e.kind == "tld" else "domains" }}</span></td>
+    {{ count_cells(e) }}
+    <td></td>
+    <td></td>
   </tr>
+  {% for d in e.members %}{{ domain_row(d, e.key) }}{% endfor %}
+  {% else %}{{ domain_row(e) }}{% endif %}
   {% endfor %}
   </tbody>
 </table>
-{% else %}<p class="muted">No scans yet.</p>{% endif %}
+{% else %}<div class="card empty"><p>No domains yet.</p><p class="muted">Enter a domain in <a href="#scan">Start a scan</a> above - results show up here as the scan runs.</p></div>{% endif %}
 
 <script>
 (function () {
   const all = document.getElementById("export-all");
-  if (all) all.addEventListener("change", () =>
-    document.querySelectorAll(".export-sel").forEach(b => { b.checked = all.checked; }));
+  const selectable = () => document.querySelectorAll(".export-sel, .group-sel");
+  if (all) all.addEventListener("change", () => selectable().forEach(b => { b.checked = all.checked; }));
+  document.querySelectorAll("tr[data-group]").forEach(head => {
+    const box = head.querySelector(".group-sel");
+    const members = () => [...document.querySelectorAll(".export-sel")]
+      .filter(b => b.dataset.parent === head.dataset.group);
+    box.addEventListener("change", () => members().forEach(b => { b.checked = box.checked; }));
+    members().forEach(b => b.addEventListener("change", () => {
+      box.checked = members().every(m => m.checked);
+    }));
+  });
+
+  // Name the selection on the buttons that act on it.
+  const exportBtn = document.getElementById("export-btn");
+  const msg = document.getElementById("group-msg");
+  const name = document.querySelector('#export input[name=group]');
+  const needSel = document.querySelectorAll("[data-needs-selection]");
+  function selection() {
+    const n = document.querySelectorAll(".export-sel:checked").length;
+    if (exportBtn) exportBtn.textContent = n ? `Export ${n} selected (zip)` : "Export all (zip)";
+    needSel.forEach(b => { b.disabled = !n; });
+    if (msg) msg.textContent = "";
+  }
+  document.addEventListener("change", e => { if (e.target.matches(".export-sel, .group-sel, #export-all")) selection(); });
+  selection();
+  const groupBtn = document.querySelector("[data-needs-name]");
+  if (groupBtn) groupBtn.addEventListener("click", e => {
+    if (!name.value.trim()) {
+      e.preventDefault();
+      msg.textContent = "Type a group name (new or existing) first.";
+      name.focus();
+    }
+  });
+
+  // Remember which groups are expanded (per browser); all start collapsed.
+  const KEY = "posint.openGroups";
+  let open = [];
+  try { open = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) {}
+  document.querySelectorAll("tr[data-group]").forEach(tr => {
+    if (open.includes(tr.dataset.group)) {
+      tr.classList.add("open");
+      tr.querySelector(".dt-toggle").setAttribute("aria-expanded", "true");
+    }
+  });
+  const table = document.getElementById("domains");
+  if (table) table.addEventListener("dt-toggle", e => {
+    open = open.filter(g => g !== e.detail.group);
+    if (e.detail.open) open.push(e.detail.group);
+    try { localStorage.setItem(KEY, JSON.stringify(open)); } catch (err) {}
+  });
 })();
 document.querySelectorAll("form.delete").forEach(f => f.addEventListener("submit", e => {
   if (!confirm(f.dataset.confirm)) e.preventDefault();
@@ -134,7 +244,7 @@ document.querySelectorAll("form.delete").forEach(f => f.addEventListener("submit
     <td class="muted">{% if j.status in ("running", "pending", "cancelling", "interrupted") %}{{ j.stage or "…" }}{% else %}-{% endif %}</td>
     <td class="muted">{{ j.started_at or j.created_at }}</td>
     <td><a href="/scans/{{ j.id }}">details</a>
-      {% if j.resumable %}<form class="inline" method="post" action="/scans/{{ j.id }}/resume" style="display:inline"><button type="submit">Resume</button></form>{% endif %}</td>
+      {% if j.resumable %}<form class="inline" method="post" action="/scans/{{ j.id }}/resume"><button type="submit" class="secondary">Resume</button></form>{% endif %}</td>
   </tr>
   {% endfor %}
 </table>

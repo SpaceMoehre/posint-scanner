@@ -469,3 +469,23 @@ class TestScanJobs:
         db.delete_scan_checkpoints("a")
         assert db.list_scan_checkpoints("a") == []
         assert len(db.list_scan_checkpoints("b")) == 1
+
+
+class TestDomainGroups:
+    def test_group_ungroup_and_empty_groups_vanish(self, db):
+        for name in ("a.com", "b.com", "c.com"):
+            db.upsert_domain(name)
+        db.set_domain_group("Customers", ["a.com", "b.com", "unknown.com"])
+        assert db.domain_groups() == {"a.com": "Customers", "b.com": "Customers"}
+        db.set_domain_group("Other", ["b.com"])  # a domain is in one group at most
+        assert db.domain_groups() == {"a.com": "Customers", "b.com": "Other"}
+        db.ungroup_domains(["a.com"])
+        assert db.domain_groups() == {"b.com": "Other"}
+        assert [r["name"] for r in db.conn.execute("SELECT name FROM domain_groups")] == ["Other"]
+
+    def test_deleting_a_domain_drops_its_membership(self, db):
+        domain_id = db.upsert_domain("a.com")
+        db.set_domain_group("G", ["a.com"])
+        db.delete_domain(domain_id)
+        assert db.domain_groups() == {}
+        assert db.conn.execute("SELECT COUNT(*) FROM domain_groups").fetchone()[0] == 0

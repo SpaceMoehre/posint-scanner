@@ -210,6 +210,18 @@ CREATE TABLE IF NOT EXISTS tool_outputs (
     UNIQUE (domain_id, tool, target)
 );
 
+-- User-made dashboard groups; a domain is in at most one. Deleting the
+-- domain drops its membership.
+CREATE TABLE IF NOT EXISTS domain_groups (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS domain_group_members (
+    domain_id INTEGER PRIMARY KEY REFERENCES domains(id) ON DELETE CASCADE,
+    group_id INTEGER NOT NULL REFERENCES domain_groups(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -630,11 +642,54 @@ class Database:
             # A resumed job must redo this domain, not skip work whose data is gone.
             self.conn.execute("DELETE FROM scan_checkpoints WHERE domain = ?", (row["name"],))
             self.conn.execute("DELETE FROM domains WHERE id = ?", (domain_id,))
+            self._drop_empty_groups()  # its group membership cascaded away
         except Exception:
             self.conn.rollback()
             raise
         self.conn.commit()
         self.delete_orphan_ips()
+
+    # -- domain groups ----------------------------------------------------
+
+    @_locked
+    def domain_groups(self) -> dict[str, str]:
+        """Domain name -> the name of the user group it's in."""
+        rows = self.conn.execute(
+            "SELECT d.name AS domain, g.name AS grp FROM domain_group_members m "
+            "JOIN domains d ON d.id = m.domain_id JOIN domain_groups g ON g.id = m.group_id"
+        ).fetchall()
+        return {r["domain"]: r["grp"] for r in rows}
+
+    @_locked
+    def set_domain_group(self, group: str, domains: list[str]) -> None:
+        """Move `domains` (names; unknown ones are skipped) into `group`,
+        creating it if needed."""
+        self.conn.execute(
+            "INSERT INTO domain_groups (name) VALUES (?) ON CONFLICT(name) DO NOTHING", (group,)
+        )
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO domain_group_members (domain_id, group_id) "
+            "SELECT d.id, g.id FROM domains d, domain_groups g WHERE d.name = ? AND g.name = ?",
+            [(d, group) for d in domains],
+        )
+        self._drop_empty_groups()
+        self.conn.commit()
+
+    @_locked
+    def ungroup_domains(self, domains: list[str]) -> None:
+        self.conn.executemany(
+            "DELETE FROM domain_group_members WHERE domain_id = "
+            "(SELECT id FROM domains WHERE name = ?)",
+            [(d,) for d in domains],
+        )
+        self._drop_empty_groups()
+        self.conn.commit()
+
+    def _drop_empty_groups(self) -> None:
+        self.conn.execute(
+            "DELETE FROM domain_groups WHERE id NOT IN "
+            "(SELECT DISTINCT group_id FROM domain_group_members)"
+        )
 
     @_locked
     def backup_to(self, path: str | Path) -> None:

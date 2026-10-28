@@ -19,6 +19,7 @@ from posint_scanner.export.overview import (
     _collect,
     severity_of,
 )
+from posint_scanner.scope import tld_family
 from posint_scanner.sources.portscan import TLS_PORTS
 
 # Ports assumed to serve a browsable web app when nothing better says so.
@@ -150,7 +151,38 @@ def _cve_rows(hosts: list[dict]) -> list[dict]:
     return rows
 
 
+def _host_stats(hosts: list[dict]) -> dict:
+    exposures, _, criticals = _collect(hosts)
+    return {
+        "ip_count": len(hosts),
+        "service_count": sum(len(h["services"]) for h in hosts),
+        "exposure_count": len(exposures),
+        "cve_count": sum(len(h["vulns"]) for h in hosts),
+        "critical_count": len(criticals),
+    }
+
+
+def _dashboard_group(key: str, name: str, kind: str, members: list[dict]) -> dict:
+    """A dashboard row group. Its counts are over the members' combined
+    IPs - two domains on one IP count it once."""
+    hosts = {h["address"]: h for m in members for h in m["hosts"]}
+    return {
+        "key": key,
+        "name": name,
+        "kind": kind,  # "user" (made on the dashboard) or "tld" (same name, other TLDs)
+        "members": members,
+        "hostname_count": sum(m["hostname_count"] for m in members),
+        **_host_stats(list(hosts.values())),
+        "secret_count": sum(m["secret_count"] for m in members),
+        "added_at": min(m["added_at"] for m in members),
+    }
+
+
 def build_dashboard(db: Database) -> dict:
+    """`entries` is the Domains table: a group ({"members": [...], ...}) or
+    a single domain each. User groups come first; the other domains are
+    grouped with their TLD siblings (example.com + example.de) when they
+    have any."""
     hosts = _overview_hosts(db)
     domains = []
     total_hosts = 0
@@ -158,22 +190,46 @@ def build_dashboard(db: Database) -> dict:
         hostname_rows = db.list_hostnames_for_domain(domain_row["id"])
         total_hosts += len(hostname_rows)
         domain_hosts = [h for h in hosts if domain_row["name"] in h["domains"]]
-        exposures, vuln_rows, criticals = _collect(domain_hosts)
         domains.append(
             {
                 "name": domain_row["name"],
                 "added_at": domain_row["added_at"],
+                "hosts": domain_hosts,
                 "hostname_count": len(hostname_rows),
-                "ip_count": len(domain_hosts),
-                "service_count": sum(len(h["services"]) for h in domain_hosts),
-                "exposure_count": len(exposures),
-                "cve_count": sum(len(h["vulns"]) for h in domain_hosts),
-                "critical_count": len(criticals),
+                **_host_stats(domain_hosts),
                 "secret_count": db.count_secret_exposures(domain_row["id"]),
             }
         )
+
+    user_group = db.domain_groups()
+    user: dict[str, list[dict]] = {}
+    family: dict[str, list[dict]] = {}
+    singles: list[dict] = []
+    for d in domains:
+        if d["name"] in user_group:
+            user.setdefault(user_group[d["name"]], []).append(d)
+        elif (label := tld_family(d["name"])) is not None:
+            family.setdefault(label, []).append(d)
+        else:
+            singles.append(d)
+    others: list[dict] = []
+    for label, members in family.items():
+        if len(members) == 1:
+            singles += members
+        else:
+            others.append(_dashboard_group(f"tld:{label}", f"{label}.*", "tld", members))
+    others += singles
+    entries = [
+        _dashboard_group(f"user:{name}", name, "user", members)
+        for name, members in sorted(user.items(), key=lambda kv: kv[0].lower())
+    ]
+    entries += sorted(others, key=lambda e: e["name"])
+    for d in domains:
+        del d["hosts"]  # only needed for the group counts
     return {
         "domains": domains,
+        "entries": entries,
+        "group_names": sorted(user, key=str.lower),
         "total_hosts": total_hosts,
         "total_ips": len(db.list_all_ips()),
     }

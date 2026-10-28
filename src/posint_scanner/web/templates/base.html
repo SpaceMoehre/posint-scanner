@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}posint-scanner{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛰</text></svg>">
   <style>
     :root {
       --bg: #0f1419; --panel: #1a2029; --panel2: #232b36; --border: #2e3846;
@@ -20,22 +21,26 @@
       padding: 12px 20px; display: flex; gap: 20px; align-items: center; flex-wrap: wrap;
     }
     header a { color: var(--fg); text-decoration: none; font-weight: 600; }
-    header nav a { color: var(--muted); font-weight: 500; margin-right: 16px; }
-    header nav a:hover { color: var(--link); }
+    header nav a { color: var(--muted); font-weight: 500; margin-right: 16px; padding: 4px 0; border-bottom: 2px solid transparent; }
+    header nav a:hover { color: var(--fg); }
+    header nav a[aria-current=page] { color: var(--fg); border-bottom-color: var(--link); }
+    .skip { position: absolute; left: -9999px; }
+    .skip:focus { left: 12px; top: 8px; z-index: 10; background: var(--panel2); padding: 6px 12px; border-radius: 6px; }
+    :focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
     main { max-width: 1100px; margin: 0 auto; padding: 20px; }
     h1 { font-size: 22px; margin: 0 0 4px; }
-    h2 { font-size: 17px; margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    h2 { font-size: 17px; scroll-margin-top: 12px; margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
     a { color: var(--link); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .muted { color: var(--muted); }
-    table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 14px; }
+    table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 14px; font-variant-numeric: tabular-nums; }
     th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
     th { color: var(--muted); font-weight: 600; }
     tr:hover td { background: var(--panel); }
     .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin: 12px 0; }
     .stats { display: flex; gap: 12px; flex-wrap: wrap; }
     .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-width: 130px; }
-    .stat .n { font-size: 26px; font-weight: 700; }
+    .stat .n { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
     .stat .l { color: var(--muted); font-size: 13px; }
     pre { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; }
     code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
@@ -46,17 +51,27 @@
     form.scan label { display: inline-flex; align-items: center; gap: 5px; margin: 4px 14px 4px 0; font-size: 14px; }
     form.scan .source-group { margin: 2px 0; }
     form.scan .source-group > .muted { display: inline-block; min-width: 64px; font-size: 13px; }
-    input[type=text], input[type=search] { background: var(--panel2); border: 1px solid var(--border); color: var(--fg); padding: 8px 10px; border-radius: 6px; min-width: 260px; }
-    button { background: var(--link); color: #0f1419; border: 0; padding: 9px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+    input[type=text], input[type=search], input[type=password] { background: var(--panel2); border: 1px solid var(--border); color: var(--fg); padding: 8px 10px; border-radius: 6px; min-width: min(260px, 100%); max-width: 100%; }
+    input.wide { width: min(420px, 60vw); }
+    button { background: var(--link); color: #0f1419; border: 1px solid transparent; padding: 9px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: filter .15s, background-color .15s, transform .05s; }
     button:hover { filter: brightness(1.1); }
+    button:active { transform: translateY(1px); }
+    button:disabled { opacity: .45; cursor: not-allowed; filter: none; transform: none; }
+    button.secondary { background: var(--panel2); color: var(--fg); border-color: var(--border); }
+    button.secondary:hover { border-color: var(--muted); filter: none; }
     button.danger { background: var(--crit); }
-    form.inline { margin: 0; }
+    button.danger-quiet { background: none; color: var(--muted); border-color: var(--border); }
+    button.danger-quiet:hover { color: var(--crit); border-color: var(--crit); filter: none; }
+    form.inline { margin: 0; display: inline-block; }
     form.inline button { padding: 4px 12px; font-size: 13px; }
     .st { font-weight: 600; } .st-running { color: var(--med); } .st-completed { color: var(--low); }
     .st-failed { color: var(--crit); } .st-pending { color: var(--muted); }
     .st-cancelled { color: var(--crit); } .st-cancelling { color: var(--med); }
     .st-interrupted { color: var(--med); }
     .note { color: var(--muted); font-size: 13px; }
+    .card.err { border-color: var(--crit); }
+    .card.ok { border-color: var(--low); }
+    .inline-msg { color: var(--high); font-size: 13px; }
     /* table.dt: sortable/filterable (see script below) */
     .dt-wrap { overflow-x: auto; }
     .dt-bar { display: flex; gap: 10px; align-items: center; margin: 8px 0 0; font-size: 13px; }
@@ -66,6 +81,11 @@
     table.dt th[aria-sort=ascending]::after { content: " ▲"; font-size: 10px; }
     table.dt th[aria-sort=descending]::after { content: " ▼"; font-size: 10px; }
     table.dt tr.dt-filters th { padding: 3px 6px; }
+    table.dt tr[data-group] td { background: var(--panel); font-weight: 600; }
+    table.dt tr[data-parent] td:nth-child(2) { padding-left: 34px; }
+    button.dt-toggle { background: none; color: var(--fg); padding: 0 6px 0 0; font: inherit; }
+    button.dt-toggle::before { content: "▸"; display: inline-block; width: 14px; color: var(--muted); }
+    tr.open button.dt-toggle::before { content: "▾"; }
     table.dt tr.dt-filters input, table.dt tr.dt-filters select {
       width: 100%; min-width: 60px; background: var(--panel2); border: 1px solid var(--border);
       color: var(--fg); padding: 3px 6px; border-radius: 4px; font-size: 12px; font-weight: 400;
@@ -85,6 +105,12 @@
   // space-separated terms that must all match: case-insensitive substrings,
   // "-x" / "!x" excludes, "quoted phrases" keep spaces, and ">7" / "<=80"
   // compare numerically.
+  // Row groups: a <tr data-group="id"> heads the <tr data-parent="id"> rows
+  // after it. Members show while the head has class "open" (a .dt-toggle in
+  // it flips that and fires "dt-toggle" on the table) or while a search or
+  // filter is active; a head shows when it or a member matches, and matching
+  // the head (e.g. by group name) matches all its members. Sorting keeps
+  // members under their head. The row count counts non-head rows.
   document.addEventListener("DOMContentLoaded", () => {
     const cmp = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"}).compare;
     const key = td => td ? (td.dataset.sort ?? td.textContent.trim()) : "";
@@ -117,6 +143,9 @@
     document.querySelectorAll("table.dt").forEach(table => {
       const head = table.tHead.rows[0], body = table.tBodies[0];
       const rows = Array.from(body.rows), ths = Array.from(head.cells);
+      const heads = new Map(rows.filter(tr => tr.dataset.group).map(tr => [tr.dataset.group, tr]));
+      const members = id => rows.filter(tr => tr.dataset.parent === id);
+      const leaves = rows.filter(tr => !tr.dataset.group);
       const filters = new Array(ths.length).fill("");
 
       const wrap = document.createElement("div");
@@ -131,18 +160,30 @@
 
       function apply() {
         const q = search.value.trim();
-        let shown = 0;
-        rows.forEach(tr => {
-          const ok = (!q || matches(tr.textContent, q)) && filters.every((f, i) => {
-            if (!f) return true;
-            const td = tr.cells[i];
-            return ths[i].dataset.filter === "select" ? values(td).includes(f) : matches(td ? td.textContent : "", f, key(td));
-          });
-          tr.hidden = !ok;
-          shown += ok;
+        const active = Boolean(q) || filters.some(Boolean);
+        const ok = tr => (!q || matches(tr.textContent, q)) && filters.every((f, i) => {
+          if (!f) return true;
+          const td = tr.cells[i];
+          return ths[i].dataset.filter === "select" ? values(td).includes(f) : matches(td ? td.textContent : "", f, key(td));
         });
-        count.textContent = shown === rows.length ? `${rows.length} row${rows.length === 1 ? "" : "s"}` : `${shown} of ${rows.length} rows`;
+        const headOk = new Map([...heads].map(([id, tr]) => [id, active && ok(tr)]));
+        const hit = new Set();
+        let shown = 0;
+        leaves.forEach(tr => {
+          const parent = tr.dataset.parent;
+          const matched = ok(tr) || (parent !== undefined && headOk.get(parent));
+          if (matched) { shown++; if (parent !== undefined) hit.add(parent); }
+          tr.hidden = !matched || (parent !== undefined && !active && !heads.get(parent)?.classList.contains("open"));
+        });
+        heads.forEach((tr, id) => { tr.hidden = active && !headOk.get(id) && !hit.has(id); });
+        count.textContent = shown === leaves.length ? `${leaves.length} row${leaves.length === 1 ? "" : "s"}` : `${shown} of ${leaves.length} rows`;
       }
+      heads.forEach((tr, id) => tr.querySelectorAll(".dt-toggle").forEach(btn => btn.addEventListener("click", () => {
+        const open = tr.classList.toggle("open");
+        btn.setAttribute("aria-expanded", open);
+        apply();
+        table.dispatchEvent(new CustomEvent("dt-toggle", {detail: {group: id, open}}));
+      })));
 
       const frow = table.tHead.insertRow();
       frow.className = "dt-filters";
@@ -154,7 +195,7 @@
         let input;
         if (mode === "select") {
           input = document.createElement("select");
-          const opts = [...new Set(rows.flatMap(tr => values(tr.cells[i])))].sort(cmp);
+          const opts = [...new Set(leaves.flatMap(tr => values(tr.cells[i])))].sort(cmp);
           input.innerHTML = '<option value="">all</option>';
           opts.forEach(o => input.add(new Option(o, o)));
         } else {
@@ -172,13 +213,14 @@
           const desc = th.getAttribute("aria-sort") === "ascending";
           ths.forEach(h => h.removeAttribute("aria-sort"));
           th.setAttribute("aria-sort", desc ? "descending" : "ascending");
-          const sorted = rows.slice().sort((a, b) => {
+          const by = (a, b) => {
             const x = key(a.cells[i]), y = key(b.cells[i]);
             if (isBlank(x) !== isBlank(y)) return isBlank(x) ? 1 : -1;  // blanks last
             const r = isNum(x) && isNum(y) ? parseFloat(x) - parseFloat(y) : cmp(x, y);
             return desc ? -r : r;
-          });
-          body.append(...sorted);
+          };
+          body.append(...rows.filter(tr => tr.dataset.parent === undefined).sort(by).flatMap(tr =>
+            tr.dataset.group ? [tr, ...members(tr.dataset.group).sort(by)] : [tr]));
         });
       });
       search.addEventListener("input", apply);
@@ -189,14 +231,16 @@
   {% block head %}{% endblock %}
 </head>
 <body>
+  <a class="skip" href="#main">Skip to content</a>
   <header>
     <a href="/">🛰 posint-scanner</a>
+    {% set path = request.url.path %}
     <nav>
-      <a href="/">Dashboard</a>
-      <a href="/overview">Security Overview</a>
-      <a href="/settings">Settings</a>
+      <a href="/"{% if path == "/" %} aria-current="page"{% endif %}>Dashboard</a>
+      <a href="/overview"{% if path.startswith("/overview") %} aria-current="page"{% endif %}>Security Overview</a>
+      <a href="/settings"{% if path.startswith("/settings") %} aria-current="page"{% endif %}>Settings</a>
     </nav>
   </header>
-  <main>{% block body %}{% endblock %}</main>
+  <main id="main">{% block body %}{% endblock %}</main>
 </body>
 </html>

@@ -312,7 +312,9 @@ class TestEmptyDb:
         app = create_app(db_path=str(tmp_path / "empty.db"),
                          config_path=str(tmp_path / "none.yaml"))
         c = TestClient(app)
-        assert c.get("/").status_code == 200
+        r = c.get("/")
+        assert r.status_code == 200
+        assert "No domains yet." in r.text
         r = c.get("/overview")
         assert r.status_code == 200
         assert "None found." in r.text
@@ -667,6 +669,94 @@ class TestDeleteAndExport:
         assert got == [every[0]]
         assert [n for n in z.namelist() if n.startswith("vault/Domains/")] == [
             f"vault/Domains/{every[0]}.md"]
+
+
+class TestDashboardUsability:
+    def test_running_scans_are_listed_up_top(self, client):
+        job = {"id": "j1", "domain": "busy.com", "status": "running", "stage": "enrichment",
+               "detail": "", "error": None, "created_at": "2026-10-28", "started_at": None,
+               "finished_at": None, "resumes": 0, "resumable": False}
+        fake = type("Job", (), {"as_dict": lambda self: job})()
+        with patch("posint_scanner.web.scans.ScanManager.list", return_value=[fake]):
+            page = client.get("/").text
+        assert "Active scans (1)" in page
+        assert page.index('href="/scans/j1"') < page.index("<h2>Domains</h2>")
+
+    def test_no_active_scans_section_when_idle(self, client):
+        assert "Active scans" not in client.get("/").text
+
+    def test_current_page_is_marked_in_nav(self, client):
+        assert '<a href="/settings" aria-current="page">' in client.get("/settings").text
+        assert '<a href="/" aria-current="page">' in client.get("/").text
+
+
+class TestDomainGroups:
+    @pytest.fixture
+    def grouped_client(self, seeded_db, tmp_path):
+        with Database(seeded_db) as db:
+            for name in ("dns-net.com", "dns-net.co.uk", "acme.com", "acme.org", "solo.io"):
+                db.upsert_domain(name)
+            # dns-net.com shares dns-net.de's IP: the group counts it once.
+            hostname_id = db.upsert_hostname(db.get_domain_by_name("dns-net.com")["id"], "www.dns-net.com")
+            db.upsert_resolution(hostname_id, db.upsert_ip("212.86.33.249"))
+        app = create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
+        return TestClient(app)
+
+    def test_tld_siblings_are_grouped(self):
+        from posint_scanner.web.views import build_dashboard
+
+        with Database(":memory:") as db:
+            db.init_schema()
+            for name in ("example.com", "example.de", "other.com", "example.github.io"):
+                db.upsert_domain(name)
+            entries = build_dashboard(db)["entries"]
+        assert [(e["name"], [m["name"] for m in e.get("members", [])]) for e in entries] == [
+            ("example.*", ["example.com", "example.de"]),
+            ("example.github.io", []),
+            ("other.com", []),
+        ]
+
+    def test_group_counts_shared_ips_once(self, grouped_client):
+        from posint_scanner.web.views import build_dashboard
+
+        with Database(grouped_client.app.state.db.path) as db:
+            group = next(e for e in build_dashboard(db)["entries"] if e["name"] == "dns-net.*")
+        assert [m["name"] for m in group["members"]] == ["dns-net.co.uk", "dns-net.com", "dns-net.de"]
+        assert group["ip_count"] == 1
+        assert group["hostname_count"] == 2
+
+    def test_dashboard_renders_group_rows(self, grouped_client):
+        r = grouped_client.get("/")
+        assert 'data-group="tld:dns-net"' in r.text
+        assert 'data-group="tld:acme"' in r.text
+        assert r.text.count('data-parent="tld:dns-net"') == 6  # row + checkbox per member
+        assert 'data-parent' not in r.text.split('value="solo.io"')[0].rsplit("<tr", 1)[1]
+
+    def test_user_group_overrides_tld_group(self, grouped_client):
+        r = grouped_client.post(
+            "/domain-groups",
+            data={"group": "  Clients   A ", "domain": ["acme.com", "solo.io"]},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        page = grouped_client.get("/").text
+        assert 'data-group="user:Clients A"' in page
+        assert page.count('data-parent="user:Clients A"') == 4
+        assert 'data-group="tld:acme"' not in page  # acme.org is left on its own
+        assert '<option value="Clients A">' in page
+        assert page.index('data-group="user:Clients A"') < page.index('data-group="tld:dns-net"')
+
+    def test_ungroup(self, grouped_client):
+        grouped_client.post("/domain-groups", data={"group": "G", "domain": ["acme.com", "solo.io"]})
+        grouped_client.post("/domain-groups/remove", data={"domain": ["acme.com", "solo.io"]})
+        page = grouped_client.get("/").text
+        assert 'data-group="user:G"' not in page
+        assert 'data-group="tld:acme"' in page
+
+    def test_blank_name_or_no_selection_is_a_no_op(self, grouped_client):
+        grouped_client.post("/domain-groups", data={"group": " ", "domain": ["acme.com"]})
+        grouped_client.post("/domain-groups", data={"group": "G"})
+        assert 'data-group="user:' not in grouped_client.get("/").text
 
 
 class TestRawReports:

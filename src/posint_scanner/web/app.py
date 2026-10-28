@@ -51,6 +51,7 @@ from posint_scanner.web.scans import ScanManager, ScanOptions
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Report formats that aren't plain JSON, for the download's file name.
 _REPORT_EXTENSIONS = {"nuclei": "jsonl", "trufflehog": "jsonl", "scoutsuite": "js"}
+MAX_GROUP_NAME_LENGTH = 80
 
 
 def create_app(
@@ -206,6 +207,20 @@ def create_app(
                 message=f"Not deleting {name} while a scan is running - try again once it finishes.",
             )
         db.delete_domain(row["id"])
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/domain-groups")
+    def group_domains(
+        domain: list[str] = Form([]), group: str = Form("")
+    ) -> RedirectResponse:
+        group = " ".join(group.split())[:MAX_GROUP_NAME_LENGTH]
+        if group and domain:
+            db.set_domain_group(group, domain)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/domain-groups/remove")
+    def ungroup_domains(domain: list[str] = Form([])) -> RedirectResponse:
+        db.ungroup_domains(domain)
         return RedirectResponse("/", status_code=303)
 
     @app.get("/reports/{output_id}", response_model=None)

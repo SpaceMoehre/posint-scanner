@@ -44,6 +44,21 @@ def registrable_domain(hostname: str) -> str | None:
     return result.top_domain_under_public_suffix or None
 
 
+def tld_family(domain: str) -> str | None:
+    """The name `domain` shares with its TLD siblings (`example` for
+    `example.com` and `example.co.uk`), or None when it has none: IPs,
+    subdomains and names under a private suffix (see is_tld_sibling)."""
+    try:
+        ipaddress.ip_address(domain)
+        return None
+    except ValueError:
+        pass
+    result = _EXTRACT(domain)
+    if not result.domain or not result.suffix or result.subdomain or result.is_private:
+        return None
+    return result.domain
+
+
 def is_tld_sibling(candidate: str, domain: str) -> bool:
     """True if registrable `candidate` is `domain` under another public suffix
     (`example.net` for `example.com`). Only ICANN suffixes: names under a

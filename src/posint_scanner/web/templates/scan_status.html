@@ -13,7 +13,7 @@
     <p class="note">This page refreshes automatically. A full scan (netblock sweep + enrichment + fingerprint + CVE lookup) can take several minutes.</p>
     {% if job.status == "cancelling" %}<p class="muted">Cancelling - finishing the current step…</p>
     {% else %}
-    <form method="post" action="/scans/{{ job.id }}/cancel"><button type="submit">Cancel scan</button></form>
+    <form method="post" action="/scans/{{ job.id }}/cancel"><button type="submit" class="secondary">Cancel scan</button></form>
     {% endif %}
   {% elif job.status == "interrupted" %}
     <p class="st-interrupted">Interrupted - the server stopped during the {{ job.stage or "first" }} stage.</p>
