@@ -1,3 +1,5 @@
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,21 @@ def isolated_tool_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(toolrun, "_cache_root", tmp_path / ".posint-cache")
     monkeypatch.setattr(toolrun, "_limits", toolrun._limits)
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def restore_root_logging():
+    """CLI commands run setup_logging(), whose root handler writes to the
+    stderr CliRunner swaps in and closes after the command - drop it, or a
+    later test's logging writes to a closed file."""
+    root = logging.getLogger()
+    level = root.level
+    yield
+    for handler in root.handlers[:]:
+        if type(handler) in (logging.StreamHandler, RotatingFileHandler):
+            root.removeHandler(handler)
+            handler.close()
+    root.setLevel(level)
 
 
 @pytest.fixture(autouse=True)
