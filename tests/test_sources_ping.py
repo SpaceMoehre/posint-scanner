@@ -45,7 +45,7 @@ class TestPingSourceEnrich:
             {"returncode": 0, "stdout": "64 bytes from 1.2.3.4: icmp_seq=1 ttl=64 time=5.0 ms\n"},
         )()
         with patch("shutil.which", return_value="/usr/bin/ping"):
-            with patch("subprocess.run", return_value=fake_completed) as mock_run:
+            with patch("posint_scanner.toolrun.run_light", return_value=fake_completed) as mock_run:
                 result = source.enrich("1.2.3.4", [])
 
         assert result.source == "ping"

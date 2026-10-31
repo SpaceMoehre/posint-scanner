@@ -14,10 +14,7 @@ this project is Linux-first, so no cross-platform ping abstraction.
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
-
-from posint_scanner import proxy
+from posint_scanner import proxy, toolrun
 from posint_scanner.models import EnrichmentResult
 from posint_scanner.sources.base import Source, SourceUnavailableError
 
@@ -43,16 +40,15 @@ class PingSource(Source):
     def enrich(self, target: str, hostnames: list[str]) -> EnrichmentResult:
         if reason := proxy.unavailable_reason("ping (ICMP)"):
             raise SourceUnavailableError(reason)
-        binary_path = shutil.which(BINARY)
+        binary_path = toolrun.which(BINARY)
         if binary_path is None:
             raise SourceUnavailableError(f"{BINARY} not found on PATH")
 
-        result = subprocess.run(
+        result = toolrun.run_light(
             [binary_path, "-c", "1", "-W", str(TIMEOUT_SECONDS), target],
-            capture_output=True,
-            text=True,
             timeout=TIMEOUT_SECONDS + 2,
-            check=False,
         )
+        if result is None:
+            raise RuntimeError(f"{BINARY} did not finish (timed out or failed to start)")
         data = parse_ping_output(result.returncode, result.stdout)
         return EnrichmentResult(source="ping", target_type="ip", target=target, data=data)

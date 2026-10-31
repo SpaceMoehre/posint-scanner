@@ -60,6 +60,9 @@ _DB_UPDATES = {
     "wpscan": [["--update", "--no-banner"]],
 }
 DB_UPDATE_TIMEOUT_SECONDS = 1800
+# The downloads pass through the sandbox's tmpfs before landing in the
+# cache (trivy's Java DB alone is several hundred MB).
+DB_UPDATE_SANDBOX_MB = 3072
 
 
 @app.command("update-dbs")
@@ -73,6 +76,9 @@ def update_dbs(
     them, so run this before the first scan and whenever they should be
     refreshed."""
     toolrun.configure(db_path)
+    if (error := toolrun.sandbox_error()) is not None:
+        typer.echo(f"error: tool sandbox unavailable: {error}", err=True)
+        raise typer.Exit(code=1)
     failed = False
     for tool, runs in _DB_UPDATES.items():
         binary = shutil.which(tool)
@@ -84,7 +90,10 @@ def update_dbs(
         for args in runs:
             if tool == "trivy":
                 args = [*args, "--cache-dir", str(cache)]
-            with toolrun.workspace(f"update-{tool}") as workspace:
+            # The cache is the one path a sandbox may write outside its tmpfs.
+            with toolrun.workspace(
+                f"update-{tool}", writable=[cache], size_mb=DB_UPDATE_SANDBOX_MB
+            ) as workspace:
                 result = toolrun.run_tool(
                     [binary, *args], timeout=DB_UPDATE_TIMEOUT_SECONDS, cwd=workspace,
                     # wpscan keeps its DB under HOME.
@@ -95,7 +104,24 @@ def update_dbs(
                 detail = result.stderr.strip()[-300:] if result else "did not finish"
                 typer.echo(f"{tool} {' '.join(args)}: failed: {detail}", err=True)
         typer.echo(f"{tool}: database in {cache}")
-    toolrun.release()
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command("sandbox-check")
+def sandbox_check(
+    db_path: str = typer.Option(
+        DEFAULT_DB_PATH, "--db", help="Database whose data dir the sandbox must not write to."
+    ),
+) -> None:
+    """Test the bubblewrap sandbox every external tool runs in, where it will
+    run (e.g. `docker compose exec posint-scanner posint-scanner sandbox-check
+    --db /data/posint.db`). Exits 1 if any check fails."""
+    toolrun.configure(db_path)
+    failed = False
+    for name, passed, detail in toolrun.self_check():
+        typer.echo(f"{'PASS' if passed else 'FAIL'}  {name}" + (f": {detail}" if detail else ""))
+        failed = failed or not passed
     if failed:
         raise typer.Exit(code=1)
 
@@ -134,8 +160,9 @@ def scan(
         False,
         "--no-active",
         help=(
-            "Disable every active source and stage (ping, port scan, tech "
-            "fingerprint) - the ones that send traffic straight to the target."
+            "Disable every active source and stage (ping, port scan, port "
+            "verification, tech fingerprint) - the ones that send traffic "
+            "straight to the target."
         ),
     ),
     fresh: bool = typer.Option(
@@ -207,6 +234,17 @@ def scan(
         None,
         "--scan-ports/--no-scan-ports",
         help="Deprecated: same as --source portscan / --no-source portscan.",
+    ),
+    verify_ports: Optional[bool] = typer.Option(
+        None,
+        "--verify-ports/--no-verify-ports",
+        help=(
+            "TCP-connect every port the enrichment sources reported (Shodan, "
+            "Censys, ...) and drop the ones that don't accept the connection, "
+            "so later stages only see ports open now. An active stage, so it "
+            "follows --no-active / config `defaults: {active: ...}` unless set "
+            "explicitly."
+        ),
     ),
     fingerprint: Optional[bool] = typer.Option(
         None,
@@ -344,6 +382,7 @@ def scan(
         selection.enable.add("shodan_web")
 
     config = load_config(config_path)
+    toolrun.set_limits(config.sandbox.size_mb, config.sandbox.max_inodes)
     # Credentials set from the web Settings page live in the scan DB; fold
     # them into the config so a CLI scan against the same DB uses them too.
     with Database(db_path) as _db:
@@ -359,6 +398,8 @@ def scan(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1)
     active_default = selection.categories.get("active", config.defaults.active)
+    if verify_ports is None:
+        verify_ports = active_default
     if fingerprint is None:
         fingerprint = active_default
     if php2shell is None:
@@ -376,6 +417,7 @@ def scan(
             netblock_sweep_max_addresses=netblock_sweep_max_addresses,
             netblock_sweep_resolvers=resolver_ips,
             netblock_sweep_workers=netblock_sweep_workers,
+            verify_ports=verify_ports,
             tech_fingerprint=fingerprint,
             vuln_lookup=not no_vuln_lookup,
             nuclei_scan=nuclei,

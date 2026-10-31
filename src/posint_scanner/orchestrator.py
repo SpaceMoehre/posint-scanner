@@ -59,7 +59,7 @@ from posint_scanner.scope import is_tld_sibling, split_related
 from posint_scanner.settings import apply_settings
 from posint_scanner.sources.base import ScrapeParseError, Source, SourceUnavailableError
 from posint_scanner.sources.dnsrecon import SWEEP_WORKERS, sweep_netblocks
-from posint_scanner.sources.portscan import TLS_PORTS
+from posint_scanner.sources.portscan import TLS_PORTS, tcp_connect
 from posint_scanner.sources.webtech import WebTechFingerprinter
 
 logger = logging.getLogger(__name__)
@@ -209,6 +209,9 @@ MAX_ENRICHMENT_PASSES = 2
 # hosting (a CDN edge, a big web host) - its neighbours say nothing about the
 # target's owner, so none of them become candidate domains.
 SHARED_HOSTING_THRESHOLD = 25
+# Connects in flight while verifying reported ports (also capped process-wide
+# by portscan's probe semaphore).
+PORT_VERIFY_WORKERS = 50
 
 # (source name, target label, related hostnames) from one collection or
 # enrichment result.
@@ -835,6 +838,67 @@ def _run_enrichment_with_feedback(
         )
         enriched_ip_ids |= more_ip_ids
     _absorb_related(db, domain_id, domain, related, targets)
+
+
+def _run_port_verification(db: Database, domain_id: int, enabled: bool) -> None:
+    """Active stage: TCP-connect every TCP service enrichment left on the
+    domain's IPs and delete the ones that don't accept the connection.
+    Shodan, Censys, LeakIX etc. report what their crawlers saw, possibly
+    months ago; only ports open now go on to the fingerprint, CVE and scanner
+    stages. What the sources reported is still in their `results` rows, and
+    each IP gets a `port_verify` result listing what answered and what was
+    dropped. UDP services can't be checked with a connect and are left as
+    they are.
+
+    If not a single port answers, that's more likely this host's own
+    connectivity (or a proxy) than every service being gone, so nothing is
+    deleted then."""
+    if not enabled:
+        return
+
+    jobs: list[tuple[int, str, int]] = []
+    seen_ip_ids: set[int] = set()
+    for hostname_row in db.list_hostnames_for_domain(domain_id):
+        for ip_row in db.list_ips_for_hostname(hostname_row["id"]):
+            if ip_row["id"] in seen_ip_ids:
+                continue
+            seen_ip_ids.add(ip_row["id"])
+            for service in db.list_services_for_ip(ip_row["id"]):
+                if service["protocol"] == "tcp":
+                    jobs.append((ip_row["id"], ip_row["address"], service["port"]))
+    if not jobs:
+        return
+
+    open_ports: dict[int, list[int]] = {}
+    closed_ports: dict[int, list[int]] = {}
+    with ThreadPoolExecutor(max_workers=PORT_VERIFY_WORKERS) as executor:
+        futures = {executor.submit(tcp_connect, address, port): (ip_id, port)
+                   for ip_id, address, port in jobs}
+        for future in as_completed(futures):
+            ip_id, port = futures.pop(future)
+            (open_ports if future.result() else closed_ports).setdefault(ip_id, []).append(port)
+
+    if not open_ports:
+        logger.warning(
+            "port verification: none of %d reported port(s) accepted a TCP connect - "
+            "assuming no connectivity from here, keeping them all", len(jobs),
+        )
+        return
+    dropped = 0
+    for ip_id in open_ports.keys() | closed_ports.keys():
+        opened = sorted(open_ports.get(ip_id, []))
+        closed = sorted(closed_ports.get(ip_id, []))
+        try:
+            for port in closed:
+                db.delete_service(ip_id, port, "tcp")
+            db.insert_result("port_verify", "ip", ip_id, {"open": opened, "closed": closed})
+            dropped += len(closed)
+        except Exception:
+            logger.exception("failed to persist port verification for IP %s - continuing", ip_id)
+    logger.info(
+        "port verification: %d of %d reported port(s) open, %d dropped",
+        len(jobs) - dropped, len(jobs), dropped,
+    )
 
 
 def _run_tech_fingerprint(
@@ -1622,6 +1686,7 @@ def _run_domain_pipeline(
     netblock_sweep_max_addresses: int,
     netblock_sweep_resolvers: list[str],
     netblock_sweep_workers: int,
+    verify_ports: bool,
     tech_fingerprint: bool,
     fingerprinter: WebTechFingerprinter,
     vuln_lookup: bool,
@@ -1725,6 +1790,10 @@ def _run_domain_pipeline(
             ),
         )
         stage(
+            "port verification",
+            lambda: _run_port_verification(db, domain_id, verify_ports),
+        )
+        stage(
             "fingerprint",
             lambda: _run_tech_fingerprint(
                 db, domain_id, tech_fingerprint, fingerprinter, workers, ck
@@ -1783,6 +1852,7 @@ def run_scan(
     netblock_sweep_max_addresses: int = DEFAULT_NETBLOCK_SWEEP_MAX_ADDRESSES,
     netblock_sweep_resolvers: list[str] | None = None,
     netblock_sweep_workers: int = DEFAULT_NETBLOCK_SWEEP_WORKERS,
+    verify_ports: bool = True,
     tech_fingerprint: bool = True,
     vuln_lookup: bool = True,
     nuclei_scan: bool = False,
@@ -1811,8 +1881,7 @@ def run_scan(
     # Global proxy from the Settings page; raises before anything is sent if
     # a configured proxy is unreachable.
     apply_settings(db)
-    # External tools work in scratch dirs next to the DB; this also clears
-    # what a killed earlier run left there.
+    # External tools' sandbox slots and DB cache live next to the DB.
     toolrun.configure(db.path)
     active_sources = []
     for source in filter_by_name(sources, source_filter):
@@ -1877,6 +1946,7 @@ def run_scan(
                 netblock_sweep_max_addresses,
                 resolvers,
                 netblock_sweep_workers,
+                verify_ports,
                 tech_fingerprint,
                 fingerprinter,
                 vuln_lookup,
@@ -1917,7 +1987,6 @@ def run_scan(
             if not control.cancelled():
                 pending |= {submit(domain) for domain in targets.take_queued()}
     _release_cycles(force=True)
-    toolrun.release()
     try:
         db.checkpoint()
     except Exception:

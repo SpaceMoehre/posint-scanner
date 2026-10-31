@@ -27,6 +27,7 @@ import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 
+from posint_scanner import toolrun
 from posint_scanner.config import load_config
 from posint_scanner.db import Database
 from posint_scanner.orchestrator import Checkpoints, ScanControl, run_scan
@@ -55,6 +56,7 @@ class ScanOptions:
 
     sources: set[str] | None = None
     authorize_scans: bool = False
+    verify_ports: bool = True
     fingerprint: bool = True
     netblock_sweep: bool = True
     vuln_lookup: bool = True
@@ -248,6 +250,7 @@ class ScanManager:
         job.control = ScanControl(on_progress=on_progress)
         try:
             config = load_config(self.config_path)
+            toolrun.set_limits(config.sandbox.size_mb, config.sandbox.max_inodes)
             opts = job.options
             # The worker's own connection (see module docstring). check_same_thread
             # is already off in Database, but a fresh one keeps the scan's long
@@ -267,6 +270,7 @@ class ScanManager:
                     [job.domain],
                     sources,
                     netblock_sweep=opts.netblock_sweep,
+                    verify_ports=opts.verify_ports,
                     tech_fingerprint=opts.fingerprint,
                     vuln_lookup=opts.vuln_lookup,
                     nuclei_scan=opts.nuclei,

@@ -20,4 +20,16 @@ services:
     # Reaps processes scanner tools orphan, so none linger as zombies in the
     # long-running server.
     init: true
+    # Every external tool runs in a bubblewrap sandbox (read-only root, its own
+    # tmpfs and PID namespace - see toolrun.py), which Docker's defaults block:
+    # seccomp forbids the namespace syscalls, AppArmor the mounts, and the
+    # masked /proc paths the sandbox's own /proc. The container keeps no added
+    # capabilities. Check with:
+    #   docker compose exec posint-scanner posint-scanner sandbox-check --db /data/posint.db
+    # If it still fails (e.g. Ubuntu's restricted unprivileged user namespaces),
+    # see the README's "Tool sandbox".
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined
     restart: unless-stopped

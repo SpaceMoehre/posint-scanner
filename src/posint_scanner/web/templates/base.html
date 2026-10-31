@@ -69,7 +69,7 @@
     .st-cancelled { color: var(--crit); } .st-cancelling { color: var(--med); }
     .st-interrupted { color: var(--med); }
     .note { color: var(--muted); font-size: 13px; }
-    .card.err { border-color: var(--crit); }
+    .card.err, .banner { border-color: var(--crit); }
     .card.ok { border-color: var(--low); }
     .inline-msg { color: var(--high); font-size: 13px; }
     /* table.dt: sortable/filterable (see script below) */
@@ -241,6 +241,10 @@
       <a href="/settings"{% if path.startswith("/settings") %} aria-current="page"{% endif %}>Settings</a>
     </nav>
   </header>
-  <main id="main">{% block body %}{% endblock %}</main>
+  <main id="main">
+    {% set sandbox_problem = sandbox_error() %}
+    {% if sandbox_problem %}<div class="card banner"><strong>Tool sandbox unavailable</strong> - every external tool (nuclei, nikto, trivy, ping, ...) is skipped: {{ sandbox_problem }}. Run <code>posint-scanner sandbox-check</code>; see the README's "Tool sandbox".</div>{% endif %}
+    {% block body %}{% endblock %}
+  </main>
 </body>
 </html>

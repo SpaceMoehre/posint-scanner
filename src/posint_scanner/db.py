@@ -506,6 +506,14 @@ class Database:
             "SELECT * FROM services WHERE ip_id = ? ORDER BY port, protocol", (ip_id,)
         ).fetchall()
 
+    @_locked
+    def delete_service(self, ip_id: int, port: int, protocol: str = "tcp") -> None:
+        self.conn.execute(
+            "DELETE FROM services WHERE ip_id = ? AND port = ? AND protocol = ?",
+            (ip_id, port, protocol),
+        )
+        self.conn.commit()
+
     # -- results --------------------------------------------------------
 
     @_locked

@@ -1343,6 +1343,61 @@ class TestCrossDomainConcurrency:
         assert len(instantiations) == 1
 
 
+class MultiPortEnrichSource(Source):
+    name = "fake-multi-port"
+
+    def enrich(self, target, hostnames):
+        return EnrichmentResult(
+            source=self.name,
+            target_type="ip",
+            target=target,
+            services=[
+                ServiceInfo(port=22, protocol="tcp"),
+                ServiceInfo(port=443, protocol="tcp", banner="nginx"),
+                ServiceInfo(port=161, protocol="udp"),
+            ],
+        )
+
+
+class TestPortVerification:
+    """Reported TCP ports are connect-checked after enrichment; tcp_connect is
+    autouse-mocked to "open" (conftest), overridden per test here."""
+
+    def _scan(self, db, **kwargs):
+        with patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]):
+            run_scan(
+                db, ["example.com"], [FakeDiscoverySource(), MultiPortEnrichSource()],
+                netblock_sweep=False, tech_fingerprint=False, vuln_lookup=False,
+                php2shell_scan=False, **kwargs,
+            )
+        ip_id = db.get_ip_by_address("1.2.3.4")["id"]
+        services = {(s["port"], s["protocol"]) for s in db.list_services_for_ip(ip_id)}
+        verify = [json.loads(r["data"]) for r in db.list_results_for_target("ip", ip_id)
+                  if r["source"] == "port_verify"]
+        return services, verify
+
+    def test_drops_ports_that_refuse_and_records_both(self, db, no_live_port_verify):
+        no_live_port_verify.side_effect = lambda ip, port: port == 443
+        services, verify = self._scan(db)
+        assert services == {(443, "tcp"), (161, "udp")}  # UDP isn't connect-checked
+        assert verify == [{"open": [443], "closed": [22]}]
+        assert sorted(c.args for c in no_live_port_verify.call_args_list) == [
+            ("1.2.3.4", 22), ("1.2.3.4", 443)
+        ]
+
+    def test_keeps_everything_when_nothing_answers(self, db, no_live_port_verify):
+        no_live_port_verify.return_value = False
+        services, verify = self._scan(db)
+        assert services == {(22, "tcp"), (443, "tcp"), (161, "udp")}
+        assert verify == []
+
+    def test_opt_out_makes_no_connect(self, db, no_live_port_verify):
+        no_live_port_verify.return_value = False
+        services, _ = self._scan(db, verify_ports=False)
+        no_live_port_verify.assert_not_called()
+        assert (22, "tcp") in services
+
+
 class TestTechFingerprintIntegration:
     """The fingerprint stage is on by default (opt-out) and active, so
     scan_service is patched everywhere here - never a live HTTP fetch."""

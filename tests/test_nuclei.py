@@ -52,19 +52,19 @@ class TestParse:
 
 class TestScanner:
     def test_unavailable_without_binary(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.nuclei.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         s = NucleiScanner()
         assert s.available is False
         assert s.scan(["http://h/"]) == []
 
     def test_no_targets_no_run(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.nuclei.shutil.which", lambda _: "/usr/bin/nuclei")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/nuclei")
         with patch("posint_scanner.toolrun.run_tool") as run:
             assert NucleiScanner().scan([]) == []
         run.assert_not_called()
 
     def test_runs_and_parses_jsonl(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.nuclei.shutil.which", lambda _: "/usr/bin/nuclei")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/nuclei")
         out = "\n".join([json.dumps(FINDING), "", "garbage", json.dumps(
             {"template-id": "ssl-dns-names", "info": {"name": "SSL", "severity": "info"},
              "matched-at": "http://h/"})])
@@ -88,7 +88,7 @@ class TestScanner:
         assert "-disable-update-check" in captured["cmd"]
 
     def test_custom_templates_dir_is_passed(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.nuclei.shutil.which", lambda _: "/usr/bin/nuclei")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/nuclei")
 
         class Done:
             stdout = ""
@@ -106,6 +106,6 @@ class TestScanner:
         assert "/data/nuclei-templates" in captured["cmd"]
 
     def test_tool_failure_is_swallowed(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.nuclei.shutil.which", lambda _: "/usr/bin/nuclei")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/nuclei")
         with patch("posint_scanner.toolrun.run_tool", return_value=None):
             assert NucleiScanner().scan(["http://h/"]) == []

@@ -13,7 +13,6 @@ are skipped by theHarvester itself.
 from __future__ import annotations
 
 import json
-import shutil
 
 from posint_scanner import proxy, toolrun
 from posint_scanner.models import EmailAddress, EnrichmentResult, ToolReport
@@ -81,7 +80,7 @@ class TheHarvesterSource(Source):
         # their own DNS - it can't be kept inside the tunnel.
         if reason := proxy.unavailable_reason("theHarvester"):
             raise SourceUnavailableError(reason)
-        binary_path = next((p for p in map(shutil.which, BINARIES) if p), None)
+        binary_path = next((p for p in map(toolrun.which, BINARIES) if p), None)
         if binary_path is None:
             raise SourceUnavailableError(
                 "theHarvester not found on PATH - install from "

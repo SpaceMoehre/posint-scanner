@@ -1,0 +1,66 @@
+name: Tests
+
+# The test suite, plus what the dev container can't run: the real bubblewrap
+# sandbox every external tool runs in (tests/test_sandbox_bwrap.py and
+# `posint-scanner sandbox-check`), on the runner and in the Docker image with
+# docker-compose.yml's security options.
+
+on:
+  push:
+    branches: [master, tool-sandbox]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap iputils-ping
+
+      # Ubuntu 24.04 lets only AppArmor-profiled programs create user
+      # namespaces, which bwrap needs.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # ping gets no capabilities in the sandbox; Docker allows unprivileged
+      # ICMP sockets in containers, a bare host has to.
+      - name: Allow unprivileged ping
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install
+        run: uv sync --locked --extra web
+
+      - name: Tests
+        env:
+          POSINT_REQUIRE_BWRAP: "1" # fail, don't skip, the bwrap tests
+        # Failures show up as annotations on the run, readable without the logs.
+        run: uv run --with pytest-github-actions-annotate-failures pytest -q -rs
+
+      - name: Sandbox self-check
+        run: mkdir -p "$RUNNER_TEMP/data" && uv run posint-scanner sandbox-check --db "$RUNNER_TEMP/data/posint.db"
+
+  docker-sandbox:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # The sandbox only needs the base image; skip the optional scanners.
+      - name: Build image
+        run: >
+          docker compose build
+          --build-arg INSTALL_NUCLEI=false
+          --build-arg INSTALL_CLOUDSCAN=false
+          --build-arg INSTALL_WEBSCAN=false
+          --build-arg INSTALL_PHPCHECK=false
+          --build-arg INSTALL_THEHARVESTER=false
+
+      - name: Sandbox self-check in the container
+        run: docker compose run --rm posint-scanner posint-scanner sandbox-check --db /data/posint.db

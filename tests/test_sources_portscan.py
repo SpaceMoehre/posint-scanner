@@ -8,6 +8,7 @@ from posint_scanner.sources.portscan import (
     PortScanSource,
     parse_banner,
     probe_port,
+    tcp_connect,
 )
 
 
@@ -75,6 +76,29 @@ class TestProbePortAgainstRealLocalServer:
         is_open, banner = probe_port("127.0.0.1", port)
         assert is_open is False
         assert banner is None
+
+
+class TestTcpConnect:
+    def test_listening_port_is_open(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            assert tcp_connect("127.0.0.1", listener.getsockname()[1]) is True
+
+    def test_closed_port_is_retried_then_not_open(self, monkeypatch):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        from posint_scanner import proxy
+
+        calls = []
+        real = proxy.create_connection
+        monkeypatch.setattr(
+            proxy, "create_connection", lambda *a, **kw: calls.append(a) or real(*a, **kw)
+        )
+        assert tcp_connect("127.0.0.1", port) is False
+        assert len(calls) == 2
 
 
 class TestPortScanSourceEnrich:

@@ -135,23 +135,23 @@ class TestParseTakeover:
 
 class TestScannersAbsent:
     def test_nikto_absent(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         s = NiktoScanner()
         assert s.available is False
         assert s.scan(["https://h/"]) == []
 
     def test_wpscan_absent(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         assert WpscanScanner().scan(["https://h/"]) == []
 
     def test_takeover_absent(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         assert TakeoverScanner().scan(["h"]) == []
 
 
 class TestScannerRuns:
     def test_nikto_reads_output_file(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: "/usr/bin/nikto")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/nikto")
 
         def fake_run(cmd, **kwargs):
             out = Path(cmd[cmd.index("-output") + 1])
@@ -168,7 +168,7 @@ class TestScannerRuns:
         assert len(findings) == 2
 
     def test_wpscan_passes_token_and_parses(self, monkeypatch, wpscan_db):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: "/usr/bin/wpscan")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/wpscan")
         captured = {}
 
         def fake_run(cmd, **kwargs):
@@ -187,7 +187,7 @@ class TestScannerRuns:
         assert "TOK" in captured["cmd"]
 
     def test_takeover_writes_list_and_parses(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: "/usr/bin/takeover")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/takeover")
         captured = {}
 
         def fake_run(cmd, **kwargs):
@@ -235,7 +235,7 @@ class TestParsePhpcheck:
 
 class TestPhp2ShellScanner:
     def test_runs_per_url_and_stores_the_report(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: "/usr/bin/phpcheck")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/phpcheck")
         calls, stored = [], {}
 
         def fake_run(cmd, **kwargs):
@@ -260,9 +260,9 @@ class TestPhp2ShellScanner:
         assert json.loads(toolrun.decompress(stored["https://a/"].data))["php_version"] == "8.4.26"
 
     def test_absent_or_proxied_is_skipped(self, monkeypatch):
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: None)
+        monkeypatch.setattr("shutil.which", lambda _: None)
         assert Php2ShellScanner().scan(["https://a/"]) == []
-        monkeypatch.setattr("posint_scanner.cloudscan.shutil.which", lambda _: "/usr/bin/phpcheck")
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/phpcheck")
         proxy.configure("127.0.0.1:9050")
         try:
             with patch("posint_scanner.toolrun.run_tool") as run:
