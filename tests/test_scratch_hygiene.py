@@ -116,6 +116,7 @@ class TestWorkspace:
 class TestSlots:
     def test_at_most_four_sandboxes_at_once(self):
         lock = threading.Lock()
+        full = threading.Event()
         active = peak = 0
 
         def stage():
@@ -124,7 +125,12 @@ class TestSlots:
                 with lock:
                     active += 1
                     peak = max(peak, active)
-                time.sleep(0.3)
+                    if active == toolrun.HEAVY_SLOTS:
+                        full.set()
+                # Hold the slot until all are taken, however slowly sandboxes
+                # start; the rest then queue for these.
+                full.wait(timeout=30)
+                time.sleep(0.1)
                 with lock:
                     active -= 1
 
