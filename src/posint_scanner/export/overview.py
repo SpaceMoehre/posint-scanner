@@ -26,6 +26,7 @@ SENSITIVE_PORTS: dict[int, tuple[str, str]] = {
     137: ("NetBIOS", "name service"),
     138: ("NetBIOS", "datagram service"),
     139: ("NetBIOS", "session service / SMB over NetBIOS"),
+    161: ("SNMP", "device management - discloses OS, interfaces, often a default community"),
     445: ("SMB", "file sharing - ransomware/lateral-movement target"),
     1433: ("MSSQL", "database"),
     1521: ("Oracle DB", "database"),

@@ -69,6 +69,7 @@ from posint_scanner.sources.rdap import RdapSource
 from posint_scanner.sources.securitytrails import SecurityTrailsSource
 from posint_scanner.sources.shodan_source import ShodanSource
 from posint_scanner.sources.shodan_web import ShodanWebSource
+from posint_scanner.sources.snmp_source import SnmpSource
 from posint_scanner.sources.ssllabs import SslLabsSource
 from posint_scanner.sources.subdomainsfinder import SubdomainsFinderSource
 from posint_scanner.sources.subfinder import SubfinderSource
@@ -108,6 +109,7 @@ SOURCE_CLASSES: list[type[Source]] = [
     PingSource,
     PortScanSource,
     ContainerExposureSource,
+    SnmpSource,
     ShodanWebSource,
     SubdomainsFinderSource,
     # collection (domain-level)

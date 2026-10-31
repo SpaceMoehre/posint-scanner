@@ -690,6 +690,27 @@ class TestDashboardUsability:
         assert '<a href="/" aria-current="page">' in client.get("/").text
 
 
+class TestSnmpCard:
+    def test_ip_page_shows_snmp_probe_and_shodan_snmp(self, seeded_db, tmp_path):
+        from posint_scanner import snmp
+
+        descr = "Linux web01 6.1.0-18-amd64 #1 SMP Debian 6.1.76-1 (2024-02-01) x86_64"
+        probe = {"port": 161, "state": "open", "versions": ["v2c"], "community": "public",
+                 "system": {"descr": descr}, "engine": None}
+        with Database(seeded_db) as db:
+            ip_id = db.get_ip_by_address("212.86.33.249")["id"]
+            db.insert_result("snmp", "ip", ip_id, {**probe, "analysis": snmp.analyze(probe)})
+            db.insert_result("shodan", "ip", ip_id, {"data": [
+                {"port": 161, "transport": "udp", "data": "SNMP:\n  Versions:\n    3\n  Engine Boots: 4\n"}]})
+        page = TestClient(create_app(db_path=seeded_db, config_path=str(tmp_path / "none.yaml"))
+                          ).get("/ips/212.86.33.249").text
+        assert "SNMP (2)" in page
+        assert "<code>6.1.0-18-amd64</code>" in page
+        assert "Debian 12 (bookworm)" in page
+        assert "default community &#39;public&#39;" in page
+        assert "reboot count 4" in page
+
+
 class TestDomainGroups:
     @pytest.fixture
     def grouped_client(self, seeded_db, tmp_path):

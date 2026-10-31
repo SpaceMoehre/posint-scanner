@@ -19,6 +19,7 @@ from posint_scanner.export.overview import (
     _collect,
     severity_of,
 )
+from posint_scanner import snmp
 from posint_scanner.scope import tld_family
 from posint_scanner.sources.portscan import TLS_PORTS
 
@@ -372,6 +373,23 @@ def _ip_hostnames(db: Database, ip_id: int, address: str) -> list[dict]:
     return hosts
 
 
+def snmp_findings(results: list[dict]) -> list[dict]:
+    """What SNMP disclosed about an IP, per source: the snmp probe's own
+    analysis, and Shodan's SNMP banners analyzed the same way."""
+    out = []
+    for r in results:
+        data = r["data"]
+        if r["source"] == "snmp" and data.get("state") == "open":
+            out.append({"source": "snmp probe", "fetched_at": r["fetched_at"],
+                        "record": data, "analysis": data.get("analysis") or snmp.analyze(data)})
+        elif r["source"] == "shodan":
+            for entry in data.get("data") or []:
+                if isinstance(entry, dict) and (record := snmp.shodan_snmp(entry)):
+                    out.append({"source": "shodan", "fetched_at": r["fetched_at"],
+                                "record": record, "analysis": snmp.analyze(record)})
+    return out
+
+
 def build_ip(db: Database, address: str) -> dict | None:
     row = db.get_ip_by_address(address)
     if row is None:
@@ -420,6 +438,7 @@ def build_ip(db: Database, address: str) -> dict | None:
     ]
     return {
         "address": address,
+        "snmp": snmp_findings(results),
         "first_seen": row["first_seen"],
         "last_seen": row["last_seen"],
         "hostnames": _ip_hostnames(db, row["id"], address),

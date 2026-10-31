@@ -44,6 +44,29 @@
 </table>
 {% endif %}
 
+{% if ip.snmp %}
+<h2 id="snmp">SNMP ({{ ip.snmp|length }})</h2>
+<p class="note">What the SNMP agent on UDP 161 discloses. On Linux, sysDescr is <code>uname -a</code>, so the kernel is exact; the distro is inferred from how the kernel was built.</p>
+{% for s in ip.snmp %}{% set a = s.analysis %}{% set sys = s.record.system or {} %}
+<div class="card">
+  <p><strong>{{ s.source }}</strong> <span class="muted">{{ s.fetched_at[:16] }}{% if s.record.versions %} · {{ s.record.versions|join(", ") }}{% endif %}{% if s.record.community %} · community <code>{{ s.record.community }}</code>{% endif %}</span></p>
+  <table>
+    {% if a.os %}<tr><th>OS</th><td>{{ a.os.family }}{% if a.os.kernel %} <strong><code>{{ a.os.kernel }}</code></strong>{% elif a.os.version %} <code>{{ a.os.version }}</code>{% endif %}
+      {% if a.os.distro or a.os.release %} · {{ a.os.distro or a.os.release }}{% endif %}
+      {% if a.os.package %} <span class="muted">· package {{ a.os.package }}{% if a.os.build_date %}, built {{ a.os.build_date }}{% endif %}</span>{% endif %}
+      {% if a.os.arch %} <span class="muted">· {{ a.os.arch }}</span>{% endif %}</td></tr>{% endif %}
+    {% if a.vendor %}<tr><th>Vendor</th><td>{{ a.vendor }}{% if sys.object_id %} <span class="muted"><code>{{ sys.object_id }}</code></span>{% endif %}</td></tr>{% endif %}
+    {% if a.uptime %}<tr><th>Uptime</th><td>{{ a.uptime }} <span class="muted">· booted {{ a.booted_at }}</span></td></tr>{% endif %}
+    {% if a.engine %}<tr><th>Engine</th><td>{% if a.engine.data %}{{ a.engine.format or "" }} <code>{{ a.engine.data }}</code>{% endif %} {% if a.engine.id %}<span class="muted"><code>{{ a.engine.id }}</code></span>{% endif %}</td></tr>{% endif %}
+    {% for key, label in [("name", "sysName"), ("contact", "sysContact"), ("location", "sysLocation"), ("descr", "sysDescr")] if sys[key] %}
+    <tr><th>{{ label }}</th><td>{% if key == "descr" %}<code>{{ sys[key] }}</code>{% else %}{{ sys[key] }}{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% for f in a.findings %}<p><span class="badge b-{{ f.severity|upper }}">{{ f.severity }}</span> {{ f.detail }}</p>{% endfor %}
+</div>
+{% endfor %}
+{% endif %}
+
 {% if ip.nuclei %}
 <h2>Nuclei findings ({{ ip.nuclei|length }})</h2>
 <p class="note">Active template matches from Nuclei against this host's web services. These are confirmed by probing the target (not version-inferred).</p>
