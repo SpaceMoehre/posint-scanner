@@ -92,6 +92,10 @@ fails:
   them: add `cap_add: [SYS_ADMIN]`. bwrap then works without a user
   namespace. Tools still run with every capability dropped.
 
+Outside Docker, ping (which gets no capabilities in the sandbox) needs
+unprivileged ICMP sockets - Docker allows them in containers by default:
+`sysctl -w net.ipv4.ping_group_range="0 2147483647"`.
+
 The data dir and the tool cache must not be under `/tmp`, which the sandbox
 covers with its own tmpfs.
 

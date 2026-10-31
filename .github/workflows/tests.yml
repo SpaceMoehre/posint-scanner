@@ -25,6 +25,11 @@ jobs:
       - name: Allow unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
+      # ping gets no capabilities in the sandbox; Docker allows unprivileged
+      # ICMP sockets in containers, a bare host has to.
+      - name: Allow unprivileged ping
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+
       - uses: astral-sh/setup-uv@v7
 
       - name: Install
