@@ -48,7 +48,10 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-markers = ["live: hits real third-party endpoints (run with: pytest -m live)"]
+markers = [
+    "live: hits real third-party endpoints (run with: pytest -m live)",
+    "bwrap: needs a working bubblewrap sandbox (skipped without one; CI requires it)",
+]
 
 [tool.mypy]
 python_version = "3.11"
