@@ -15,7 +15,7 @@ jobs:
   pytest:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install bubblewrap
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap iputils-ping
@@ -25,7 +25,7 @@ jobs:
       - name: Allow unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
 
       - name: Install
         run: uv sync --locked --extra web
@@ -33,7 +33,8 @@ jobs:
       - name: Tests
         env:
           POSINT_REQUIRE_BWRAP: "1" # fail, don't skip, the bwrap tests
-        run: uv run pytest -q -rs
+        # Failures show up as annotations on the run, readable without the logs.
+        run: uv run --with pytest-github-actions-annotate-failures pytest -q -rs
 
       - name: Sandbox self-check
         run: mkdir -p "$RUNNER_TEMP/data" && uv run posint-scanner sandbox-check --db "$RUNNER_TEMP/data/posint.db"
@@ -41,7 +42,7 @@ jobs:
   docker-sandbox:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Allow unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
