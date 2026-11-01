@@ -146,6 +146,7 @@
 <form id="export" method="get" action="/export.zip">
   <div class="actions">
     <button type="submit" class="secondary" id="export-btn" title="JSON, CSV, Obsidian markdown vault and a copy of the database">Export all (zip)</button>
+    <button type="submit" class="secondary" id="report-btn" formaction="/findings.md" title="One markdown file: critical and high findings in full, medium as a table">Findings report (md)</button>
     <span class="sep"></span>
     <input type="text" name="group" list="group-names" maxlength="80" placeholder="group name" aria-label="Group name">
     <datalist id="group-names">{% for n in data.group_names %}<option value="{{ n }}">{% endfor %}</datalist>
@@ -153,7 +154,7 @@
     <button type="submit" class="secondary" formmethod="post" formaction="/domain-groups/remove" data-needs-selection>Ungroup</button>
     <span class="inline-msg" id="group-msg" role="status"></span>
   </div>
-  <p class="note">Tick domains to export or group them. Domains with the same name under other TLDs are grouped automatically.</p>
+  <p class="note">Tick domains to export, report on or group them. Domains with the same name under other TLDs are grouped automatically.</p>
 </form>
 <table class="dt" id="domains">
   <thead><tr><th data-filter="none"><input type="checkbox" id="export-all" title="select all"></th><th>Domain</th><th>Hostnames</th><th>IPs</th><th>Services</th><th>Exposures</th><th>CVEs</th><th>Critical</th><th>Secrets</th><th>Added</th><th data-filter="none"></th><th data-filter="none"></th></tr></thead>
@@ -192,12 +193,14 @@
 
   // Name the selection on the buttons that act on it.
   const exportBtn = document.getElementById("export-btn");
+  const reportBtn = document.getElementById("report-btn");
   const msg = document.getElementById("group-msg");
   const name = document.querySelector('#export input[name=group]');
   const needSel = document.querySelectorAll("[data-needs-selection]");
   function selection() {
     const n = document.querySelectorAll(".export-sel:checked").length;
     if (exportBtn) exportBtn.textContent = n ? `Export ${n} selected (zip)` : "Export all (zip)";
+    if (reportBtn) reportBtn.textContent = n ? `Findings report, ${n} selected (md)` : "Findings report (md)";
     needSel.forEach(b => { b.disabled = !n; });
     if (msg) msg.textContent = "";
   }

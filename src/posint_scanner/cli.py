@@ -441,9 +441,10 @@ def scan(
 
 @app.command(name="export")
 def export_command(
-    format: str = typer.Option("obsidian", "--format", help="obsidian | json | csv"),
+    format: str = typer.Option("obsidian", "--format", help="obsidian | json | csv | findings"),
     output: str = typer.Option(
-        ..., "--output", help="Output path (directory for obsidian, file for json/csv)."
+        ..., "--output",
+        help="Output path (directory for obsidian, file for json/csv/findings).",
     ),
     db_path: str = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
 ) -> None:
@@ -455,9 +456,15 @@ def export_command(
             write_json(db, output)
         elif format == "csv":
             write_csv(db, output)
+        elif format == "findings":
+            # The findings report reuses the web UI's read-side helpers.
+            from posint_scanner.export.findings_report import render_report
+
+            Path(output).write_text(render_report(db), encoding="utf-8")
         else:
             typer.echo(
-                f"error: unknown format {format!r} (expected obsidian, json, or csv)", err=True
+                f"error: unknown format {format!r} (expected obsidian, json, csv or findings)",
+                err=True,
             )
             raise typer.Exit(code=1)
 

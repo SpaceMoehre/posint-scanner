@@ -36,8 +36,14 @@ uv run posint-scanner query --host api.example.com
 ```
 
 A scan writes only to the database. Reports are produced on demand with
-`export` (`--format obsidian | json | csv`, see **Export structure** below) or
-the web UI's export zip.
+`export` (`--format obsidian | json | csv | findings`, see **Export
+structure** below) or the web UI's export zip.
+
+`--format findings` (the web UI's "Findings report (md)" button, also on the
+overview and domain pages) writes one markdown file with every stage's
+findings on one severity scale: critical and high in full, medium as a
+table, exposed sensitive services, low/info only counted. A finding seen on
+several hosts is one entry listing where; secrets are masked.
 
 External tools (nikto, trivy, theHarvester, ping, ...) run in throwaway
 sandboxes (see **Tool sandbox** below) that can't write to disk; a run's raw

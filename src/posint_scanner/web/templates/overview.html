@@ -18,7 +18,8 @@
 {%- endmacro %}
 {% block body %}
 <h1>Security Overview{% if ov.selected_domain %} · {{ ov.selected_domain }}{% endif %}</h1>
-<p class="muted">Hosts exposing services that generally should not be public, and hosts running software with known CVEs.</p>
+<p class="muted">Hosts exposing services that generally should not be public, and hosts running software with known CVEs.
+  <a href="/findings.md{% if ov.selected_domain %}?domain={{ ov.selected_domain|urlencode }}{% endif %}">Download the findings report (md)</a> - every stage's findings, most severe first.</p>
 
 {% if ov.domains|length > 1 or ov.selected_domain %}
 <nav class="dtabs">

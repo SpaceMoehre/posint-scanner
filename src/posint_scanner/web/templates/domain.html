@@ -5,7 +5,7 @@
 {% set rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "UNKNOWN": 0} %}
 {% set secret_count = d.code_exposures | selectattr("kind", "equalto", "secret") | list | length %}
 <h1>{{ d.name }}</h1>
-<p><a href="/overview?domain={{ d.name|urlencode }}">Security overview for this domain →</a></p>
+<p><a href="/overview?domain={{ d.name|urlencode }}">Security overview for this domain →</a> · <a href="/findings.md?domain={{ d.name|urlencode }}">Findings report (md)</a></p>
 
 <div class="stats">
   <div class="stat"><div class="n">{{ d.hostnames|length }}</div><div class="l">hostnames</div></div>

@@ -25,6 +25,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.templating import Jinja2Templates
@@ -34,6 +35,7 @@ from starlette.background import BackgroundTask
 from posint_scanner import proxy, toolrun
 from posint_scanner.config import load_config
 from posint_scanner.db import Database
+from posint_scanner.export.findings_report import render_report
 from posint_scanner.export.zip_export import write_zip
 from posint_scanner.registry import describe_sources
 from posint_scanner.settings import (
@@ -195,6 +197,19 @@ def create_app(
             media_type="application/zip",
             filename=f"posint-export-{stamp}.zip",
             background=BackgroundTask(os.unlink, path),
+        )
+
+    @app.get("/findings.md")
+    def findings_report(domain: list[str] = Query([])) -> Response:
+        """The findings report (see findings_report.py); `domain` as for
+        /export.zip."""
+        now = datetime.now(timezone.utc)
+        return Response(
+            render_report(db, domains=domain or None, now=now),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": (
+                f'attachment; filename="posint-findings-{now.strftime("%Y%m%d-%H%M%S")}.md"'
+            )},
         )
 
     @app.post("/domains/{name}/delete", response_model=None)
