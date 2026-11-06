@@ -96,9 +96,17 @@ never require a schema migration - they just write here.
 | data        | TEXT NOT NULL | JSON blob, source-defined shape |
 | fetched_at  | TEXT NOT NULL | |
 
-A host can have multiple `results` rows from different sources (or the same
-source across repeated scans) - `fetched_at` lets you tell which data is
-current.
+A target has rows from many sources, but only each source's latest run: a
+rerun replaces that source's earlier rows on the target (an empty run, e.g.
+nuclei finding nothing, clears them - but a tool that couldn't complete,
+timed out or had no sandbox, leaves them). A parse warning (`parse_warning`)
+and the reason a hostname was absorbed (`related_to`) are kept beside the
+data, replaced only by their own kind; a good run clears a parse warning. A few sources run per part of a target
+and are replaced per part - `webtech` per `port`, `dnsrecon` sweep hits per
+`ip`, cloud/IaC tools per scanned `target` (`db.RESULT_RUN_KEYS`). A source
+can store several rows per run (one per nuclei finding). A netblock-sweep
+hit seen through several resolvers keeps the last one's row. Databases from
+before this keep each source's newest run (`PRAGMA user_version` 1).
 
 ### `candidate_domains`
 Out-of-scope registrable domains that a scan's enrichment sources related to

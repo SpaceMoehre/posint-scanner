@@ -191,7 +191,7 @@ class TestPersistDiscoveredHostnames:
             name (simulating a transient write failure), then behaves
             normally - matches the FlakyResultDatabase pattern used
             elsewhere in this file, but targets upsert_hostname instead of
-            insert_result."""
+            replace_results."""
 
             def __init__(self, path):
                 super().__init__(path)
@@ -220,6 +220,18 @@ class TestPersistDiscoveredHostnames:
         assert flaky_db.get_hostname_by_name("good.example.com") is not None
         assert flaky_db.get_hostname_by_name("bad.example.com") is None
         flaky_db.close()
+
+
+def _completes(findings):
+    """A scanner stand-in whose run completes: it hands over its report, as a
+    real scanner does - only a completed run replaces stored findings."""
+
+    def scan(*args, report=None, **kwargs):
+        if report is not None:
+            report("target", None)
+        return findings
+
+    return scan
 
 
 class FakeDiscoverySource(Source):
@@ -452,18 +464,18 @@ class TestRunScan:
 
 
 class FlakyResultDatabase(Database):
-    """Database whose insert_result raises once (simulating a transient
+    """Database whose replace_results raises once (simulating a transient
     write failure like a locked/readonly file) then behaves normally."""
 
     def __init__(self, path):
         super().__init__(path)
-        self._insert_result_failures_left = 1
+        self._result_write_failures_left = 1
 
-    def insert_result(self, *args, **kwargs):
-        if self._insert_result_failures_left > 0:
-            self._insert_result_failures_left -= 1
+    def replace_results(self, *args, **kwargs):
+        if self._result_write_failures_left > 0:
+            self._result_write_failures_left -= 1
             raise Exception("simulated: attempt to write a readonly database")
-        return super().insert_result(*args, **kwargs)
+        return super().replace_results(*args, **kwargs)
 
 
 class TestDbWriteResilience:
@@ -497,7 +509,7 @@ class TestDbWriteResilience:
         assert len(results_a) + len(results_b) == 1
 
     def test_discovery_write_failure_does_not_abort_scan(self, flaky_db):
-        # both discovered hostnames carry `data`, so insert_result runs during
+        # both discovered hostnames carry `data`, so results are written during
         # discovery too (not just enrichment) - the flaky failure hits the
         # first one, and the second must still get persisted.
         class TwoHostDiscoveryWithData(Source):
@@ -514,8 +526,8 @@ class TestDbWriteResilience:
 
         domain_row = flaky_db.get_domain_by_name("example.com")
         hostnames = {row["name"] for row in flaky_db.list_hostnames_for_domain(domain_row["id"])}
-        # both hostnames persist even though one's insert_result call failed -
-        # upsert_hostname and insert_result are independent try/except scopes
+        # both hostnames persist even though one's result write failed -
+        # upsert_hostname and the result write are independent try/except scopes
         assert hostnames == {"a.example.com", "b.example.com"}
 
 
@@ -917,6 +929,32 @@ class TestNucleiStage:
                      netblock_sweep=False, vuln_lookup=False)
         scan.assert_not_called()
 
+    def test_a_run_that_could_not_complete_keeps_the_earlier_findings(
+            self, db, no_live_fingerprint):
+        no_live_fingerprint.return_value = {
+            "url": "http://1.2.3.4:8080/", "status": 200, "technologies": {}, "categories": {},
+            "cpes": {}, "server_product": None, "server_version": None,
+        }
+        finding = {"template_id": "git-config", "name": "Exposed .git", "severity": "high",
+                   "matched_at": "http://1.2.3.4:8080/.git/config", "cves": []}
+
+        def scan_with(side_effect):
+            with (
+                patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
+                patch("posint_scanner.nuclei.NucleiScanner.available", True),
+                patch("posint_scanner.nuclei.NucleiScanner.scan", side_effect=side_effect),
+            ):
+                run_scan(db, ["example.com"], [FakeDiscoverySource(), self._fp_source()],
+                         netblock_sweep=False, vuln_lookup=False, nuclei_scan=True, fresh=True)
+            ip_id = db.get_ip_by_address("1.2.3.4")["id"]
+            return [json.loads(r["data"]) for r in db.list_results_for_target("ip", ip_id)
+                    if r["source"] == "nuclei"]
+
+        assert scan_with(_completes([finding])) == [finding]
+        # timed out / no sandbox: [] without a report - not "found nothing"
+        assert scan_with(lambda *a, **kw: []) == [finding]
+        assert scan_with(_completes([])) == []  # a completed clean run clears them
+
     def test_scans_fingerprinted_urls_and_persists_findings(self, db, no_live_fingerprint):
         # fingerprint stage yields a webtech result with a URL; nuclei scans it
         no_live_fingerprint.return_value = {
@@ -931,7 +969,7 @@ class TestNucleiStage:
         with (
             patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
             patch("posint_scanner.nuclei.NucleiScanner.available", True),
-            patch("posint_scanner.nuclei.NucleiScanner.scan", return_value=[finding]) as scan,
+            patch("posint_scanner.nuclei.NucleiScanner.scan", side_effect=_completes([finding])) as scan,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource(), self._fp_source()],
                      netblock_sweep=False, vuln_lookup=False, nuclei_scan=True)
@@ -947,7 +985,7 @@ class TestNucleiStage:
         with (
             patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
             patch("posint_scanner.nuclei.NucleiScanner.available", True),
-            patch("posint_scanner.nuclei.NucleiScanner.scan", return_value=[]) as scan,
+            patch("posint_scanner.nuclei.NucleiScanner.scan", side_effect=_completes([])) as scan,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource(), self._fp_source()],
                      netblock_sweep=False, vuln_lookup=False, nuclei_scan=True)
@@ -987,7 +1025,7 @@ class TestWebAppScanStage:
         with (
             patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
             patch("posint_scanner.webscan.NiktoScanner.available", True),
-            patch("posint_scanner.webscan.NiktoScanner.scan", return_value=[finding]) as nikto,
+            patch("posint_scanner.webscan.NiktoScanner.scan", side_effect=_completes([finding])) as nikto,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource(), self._svc_source()],
                      netblock_sweep=False, vuln_lookup=False, nikto_scan=True)
@@ -1005,7 +1043,7 @@ class TestWebAppScanStage:
         with (
             patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
             patch("posint_scanner.webscan.WpscanScanner.available", True),
-            patch("posint_scanner.webscan.WpscanScanner.scan", return_value=[]) as wpscan,
+            patch("posint_scanner.webscan.WpscanScanner.scan", side_effect=_completes([])) as wpscan,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource()],
                      netblock_sweep=False, vuln_lookup=False, wpscan_scan=True)
@@ -1038,7 +1076,7 @@ class TestPhp2ShellStage:
         with (
             patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
             patch("posint_scanner.webscan.Php2ShellScanner.available", True),
-            patch("posint_scanner.webscan.Php2ShellScanner.scan", return_value=findings) as scan,
+            patch("posint_scanner.webscan.Php2ShellScanner.scan", side_effect=_completes(findings)) as scan,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource(), self._svc_source()],
                      netblock_sweep=False, tech_fingerprint=False, **kwargs)
@@ -1107,7 +1145,7 @@ class TestTakeoverStage:
         with (
             patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
             patch("posint_scanner.webscan.TakeoverScanner.available", True),
-            patch("posint_scanner.webscan.TakeoverScanner.scan", return_value=[finding]) as scan,
+            patch("posint_scanner.webscan.TakeoverScanner.scan", side_effect=_completes([finding])) as scan,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource()],
                      netblock_sweep=False, vuln_lookup=False, takeover_scan=True)
@@ -1147,7 +1185,7 @@ class TestCloudScanStage:
             patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
             patch("posint_scanner.cloudscan.TrivyScanner.available", True),
             patch("posint_scanner.cloudscan.TrivyScanner.scan_image",
-                  return_value=[self.IMG_FINDING]) as img,
+                  side_effect=_completes([self.IMG_FINDING])) as img,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource()], netblock_sweep=False,
                      vuln_lookup=False, cloud_scan=True,
@@ -1172,9 +1210,9 @@ class TestCloudScanStage:
             patch("posint_scanner.orchestrator.clone_repo", return_value=True) as clone,
             patch("posint_scanner.cloudscan.TrivyScanner.available", True),
             patch("posint_scanner.cloudscan.CheckovScanner.available", True),
-            patch("posint_scanner.cloudscan.TrivyScanner.scan_fs", return_value=[]),
+            patch("posint_scanner.cloudscan.TrivyScanner.scan_fs", side_effect=_completes([])),
             patch("posint_scanner.cloudscan.CheckovScanner.scan_dir",
-                  return_value=[ckv_finding]) as ckv,
+                  side_effect=_completes([ckv_finding])) as ckv,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource()], netblock_sweep=False,
                      vuln_lookup=False, cloud_scan=True,
@@ -1202,7 +1240,7 @@ class TestCloudScanStage:
         with (
             patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
             patch("posint_scanner.cloudscan.TrivyScanner.available", True),
-            patch("posint_scanner.cloudscan.TrivyScanner.scan_image", return_value=[]) as img,
+            patch("posint_scanner.cloudscan.TrivyScanner.scan_image", side_effect=_completes([])) as img,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource(), ExposureSource()],
                      netblock_sweep=False, vuln_lookup=False, cloud_scan=True,
@@ -1234,7 +1272,7 @@ class TestCloudAuditStage:
             patch("posint_scanner.cloudscan.ProwlerScanner.available", True),
             patch("posint_scanner.cloudscan.ScoutSuiteScanner.available", False),
             patch("posint_scanner.cloudscan.ProwlerScanner.scan",
-                  return_value=[finding]) as pro,
+                  side_effect=_completes([finding])) as pro,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource()], netblock_sweep=False,
                      vuln_lookup=False, cloud_audit=True,
@@ -1677,6 +1715,17 @@ class TestGovernance:
             run_scan(db, ["example.com"], [FakeDiscoverySource(), source])
             run_scan(db, ["example.com"], [FakeDiscoverySource(), source], fresh=True)
         assert source.calls == ["1.2.3.4", "1.2.3.4"]
+
+    def test_a_rescan_replaces_a_sources_results_instead_of_adding_to_them(self, db):
+        source = CountingIpEnrichSource()
+        with patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]):
+            run_scan(db, ["example.com"], [FakeDiscoverySource(), source], fresh=True)
+            run_scan(db, ["example.com"], [FakeDiscoverySource(), source], fresh=True)
+        assert source.calls == ["1.2.3.4", "1.2.3.4"]
+        ip_row = db.get_ip_by_address("1.2.3.4")
+        rows = [r for r in db.list_results_for_target("ip", ip_row["id"])
+                if r["source"] == source.name]
+        assert len(rows) == 1
 
     def test_discovery_within_ttl_is_not_repeated(self, db):
         source = CountingDiscoverySource(ttl_days=7)
@@ -2136,7 +2185,7 @@ class TestResume:
             patch("posint_scanner.orchestrator.resolve_hostname",
                   side_effect=lambda name: ["1.2.3.4"] if name.startswith("api") else ["5.6.7.8"]),
             patch("posint_scanner.nuclei.NucleiScanner.available", True),
-            patch("posint_scanner.nuclei.NucleiScanner.scan", return_value=[]) as scan,
+            patch("posint_scanner.nuclei.NucleiScanner.scan", side_effect=_completes([])) as scan,
         ):
             run_scan(db, ["example.com"], [FakeDiscoverySource(), FakeIpEnrichSource()],
                      netblock_sweep=False, vuln_lookup=False, nuclei_scan=True,

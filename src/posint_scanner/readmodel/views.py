@@ -243,13 +243,14 @@ def domain_findings(results: list[dict], takeovers: list[dict]) -> dict:
     """What a domain's own results say (the domain page's finding panels and
     the findings report's domain part). `takeovers` are the takeover results
     on its hostnames."""
-    def first(source: str) -> dict | None:
-        return next((r["data"] for r in results if r["source"] == source), None)
+    def latest(source: str) -> dict | None:
+        return next((r["data"] for r in reversed(results)
+                     if r["source"] == source and "parse_warning" not in r["data"]), None)
 
     return {
-        "lookalikes": (first("lookalike") or {}).get("registered", []),
-        "origin": first("origin_ip"),
-        "email_auth": first("email_auth"),
+        "lookalikes": (latest("lookalike") or {}).get("registered", []),
+        "origin": latest("origin_ip"),
+        "email_auth": latest("email_auth"),
         # Already severity-sorted by the source (leakix.parse_events).
         "leakix_findings": [
             finding

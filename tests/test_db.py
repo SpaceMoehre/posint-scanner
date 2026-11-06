@@ -212,6 +212,125 @@ class TestResults:
         assert sources == {"shodan", "qualys_ssllabs"}
 
 
+def _data(db, target_type, target_id, source=None):
+    return [json.loads(r["data"]) for r in db.list_results_for_target(target_type, target_id)
+            if source is None or r["source"] == source]
+
+
+class TestReplaceResults:
+    """A source's latest run replaces its earlier results on a target."""
+
+    def test_a_rerun_replaces_the_sources_rows_and_keeps_other_sources(self, db):
+        ip = db.upsert_ip("192.0.2.1")
+        db.replace_results("nuclei", "ip", ip, [{"id": "a"}, {"id": "b"}])
+        db.replace_results("shodan", "ip", ip, [{"org": "x"}])
+        db.replace_results("nuclei", "ip", ip, [{"id": "c"}])
+        assert _data(db, "ip", ip, "nuclei") == [{"id": "c"}]
+        assert _data(db, "ip", ip, "shodan") == [{"org": "x"}]
+
+    def test_a_run_that_finds_nothing_clears_the_old_findings(self, db):
+        ip = db.upsert_ip("192.0.2.1")
+        db.replace_results("nuclei", "ip", ip, [{"id": "a"}])
+        db.replace_results("nuclei", "ip", ip, [])
+        assert _data(db, "ip", ip) == []
+
+    def test_webtech_is_replaced_per_port(self, db):
+        ip = db.upsert_ip("192.0.2.1")
+        db.replace_results("webtech", "ip", ip, [{"port": 80, "v": 1}])
+        db.replace_results("webtech", "ip", ip, [{"port": 443, "v": 1}])
+        db.replace_results("webtech", "ip", ip, [{"port": 80, "v": 2}])
+        assert sorted(_data(db, "ip", ip), key=lambda d: d["port"]) == [
+            {"port": 80, "v": 2}, {"port": 443, "v": 1}]
+
+    def test_dnsrecon_sweep_rows_are_replaced_per_ip_apart_from_zone_transfers(self, db):
+        host = db.upsert_hostname(db.upsert_domain("example.com"), "a.example.com")
+        db.replace_results("dnsrecon", "hostname", host, [{"axfr_successful": True}])
+        db.replace_results("dnsrecon", "hostname", host, [{"ip": "192.0.2.1", "r": 1}])
+        db.replace_results("dnsrecon", "hostname", host, [{"ip": "192.0.2.2", "r": 1}])
+        db.replace_results("dnsrecon", "hostname", host, [{"ip": "192.0.2.1", "r": 2}])
+        assert {json.dumps(d, sort_keys=True) for d in _data(db, "hostname", host)} == {
+            json.dumps(d, sort_keys=True) for d in (
+                {"axfr_successful": True}, {"ip": "192.0.2.1", "r": 2}, {"ip": "192.0.2.2", "r": 1})}
+
+    def test_cloud_findings_are_replaced_per_scanned_target(self, db):
+        domain = db.upsert_domain("example.com")
+        db.replace_results("trivy", "domain", domain, [{"target": "repo-a", "findings": [1]}])
+        db.replace_results("trivy", "domain", domain, [{"target": "repo-b", "findings": [1]}])
+        db.replace_results("trivy", "domain", domain, [{"target": "repo-a", "findings": []}])
+        assert sorted(_data(db, "domain", domain), key=lambda d: d["target"]) == [
+            {"target": "repo-a", "findings": []}, {"target": "repo-b", "findings": [1]}]
+
+
+    def test_a_row_sqlite_cant_parse_does_not_break_replacing(self, db):
+        ip = db.upsert_ip("192.0.2.1")
+        db.insert_result("webtech", "ip", ip, {"port": 80, "score": float("nan")})  # NaN: not JSON
+        db.replace_results("webtech", "ip", ip, [{"port": 80, "v": 2}])
+        assert {"port": 80, "v": 2} in _data(db, "ip", ip)
+
+
+    def test_a_parse_warning_sits_beside_the_data_until_a_good_run(self, db):
+        host = db.upsert_hostname(db.upsert_domain("example.com"), "a.example.com")
+        db.replace_results("scrape", "hostname", host, [{"v": 1}])
+        db.replace_results("scrape", "hostname", host, [{"parse_warning": "no table"}])
+        assert _data(db, "hostname", host) == [{"v": 1}, {"parse_warning": "no table"}]
+        db.replace_results("scrape", "hostname", host, [{"v": 2}])
+        assert _data(db, "hostname", host) == [{"v": 2}]
+
+    def test_enriching_an_absorbed_hostname_keeps_why_it_was_absorbed(self, db):
+        host = db.upsert_hostname(db.upsert_domain("example.com"), "a.example.com")
+        db.replace_results("shodan", "hostname", host, [{"related_to": "192.0.2.1"}])
+        db.replace_results("shodan", "hostname", host, [{"ports": [80]}])
+        db.replace_results("shodan", "hostname", host, [{"ports": [443]}])
+        assert _data(db, "hostname", host) == [{"related_to": "192.0.2.1"}, {"ports": [443]}]
+
+    def test_many_targets_are_replaced_at_once(self, db):
+        domain = db.upsert_domain("example.com")
+        a, b = (db.upsert_hostname(domain, f"{n}.example.com") for n in "ab")
+        db.replace_results_on("takeover", {("hostname", a): [{"id": 1}], ("hostname", b): []})
+        db.replace_results_on("takeover", {("hostname", a): [], ("hostname", b): [{"id": 2}]})
+        assert (_data(db, "hostname", a), _data(db, "hostname", b)) == ([], [{"id": 2}])
+
+    def test_a_closed_ports_fingerprint_can_be_dropped(self, db):
+        ip = db.upsert_ip("192.0.2.1")
+        db.replace_results("webtech", "ip", ip, [{"port": 80}])
+        db.replace_results("webtech", "ip", ip, [{"port": 443}])
+        db.delete_result_run("webtech", "ip", ip, 80)
+        assert _data(db, "ip", ip) == [{"port": 443}]
+
+
+class TestOldResultHistoryMigration:
+    """A DB from before results were replaced keeps each group's newest run."""
+
+    def test_only_each_sources_latest_run_survives(self, tmp_path):
+        path = tmp_path / "old.db"
+        db = Database(path)
+        db.init_schema()
+        db.conn.execute("PRAGMA user_version = 0")  # as before the migration
+        ip = db.upsert_ip("192.0.2.1")
+        old, new = "2026-01-01T00:00:00+00:00", "2026-02-01T00:00:00+00:00"
+        for when, run in ((old, 1), (new, 2)):
+            db.insert_result("nuclei", "ip", ip, {"id": "a", "run": run}, now=when)
+            db.insert_result("nuclei", "ip", ip, {"id": "b", "run": run}, now=when)
+            db.insert_result("webtech", "ip", ip, {"port": 80, "run": run}, now=when)
+        db.insert_result("webtech", "ip", ip, {"port": 443, "run": 1}, now=old)
+        db.insert_result("shodan", "ip", ip, {"run": 1}, now=old)
+        db.insert_result("webtech", "ip", ip, {"port": 8080, "x": float("nan")}, now=old)
+        db.insert_result("scrape", "ip", ip, {"good": 1}, now=old)
+        db.insert_result("scrape", "ip", ip, {"parse_warning": "x"}, now=new)
+        db.conn.commit()
+        db.close()
+        with Database(path) as db:
+            db.init_schema()
+            rows = {(r["source"], json.dumps(json.loads(r["data"]), sort_keys=True))
+                    for r in db.list_results_for_target("ip", ip)}
+        assert rows == {
+            ("nuclei", '{"id": "a", "run": 2}'), ("nuclei", '{"id": "b", "run": 2}'),
+            ("webtech", '{"port": 80, "run": 2}'), ("webtech", '{"port": 443, "run": 1}'),
+            ("shodan", '{"run": 1}'), ("webtech", '{"port": 8080, "x": NaN}'),
+            ("scrape", '{"good": 1}'), ("scrape", '{"parse_warning": "x"}'),
+        }
+
+
 class TestContinuationPruning:
     def _db(self):
         db = Database(":memory:")

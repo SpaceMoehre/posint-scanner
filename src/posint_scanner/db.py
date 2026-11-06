@@ -255,6 +255,60 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Sources whose run covers one value of a data key rather than the whole
+# target (see Database.replace_results): a webtech fingerprint is per port,
+# a dnsrecon netblock-sweep hit per IP (its zone-transfer rows have none),
+# a cloud/IaC tool's findings per scanned repo/image/account.
+RESULT_RUN_KEYS = {
+    "webtech": "port",
+    "dnsrecon": "ip",
+    "trivy": "target",
+    "checkov": "target",
+    "prowler": "target",
+    "scoutsuite": "target",
+}
+
+
+# Rows a source stores beside its data, each replaced only by its own kind
+# (see Database.replace_results): a scrape that parsed to nothing records a
+# parse warning, and a hostname absorbed because of another target's results
+# records which (enriching it later mustn't erase that).
+RESULT_SIDE_KEYS = ("related_to", "parse_warning")
+
+# A stored row's kind: a side key it carries, else "data". json.dumps may
+# have written a NaN, which SQLite's JSON functions reject - such a row is data.
+_ROW_KIND_SQL = (
+    "CASE WHEN NOT json_valid(data) THEN 'data' "
+    + " ".join(f"WHEN json_extract(data, '$.{k}') IS NOT NULL THEN '{k}'" for k in RESULT_SIDE_KEYS)
+    + " ELSE 'data' END"
+)
+
+
+def _row_kind(row: dict) -> str:
+    return next((k for k in RESULT_SIDE_KEYS if row.get(k) is not None), "data")
+
+
+def _replaced_rows(source: str, rows: list[dict]) -> tuple[str, list[Any]]:
+    """A WHERE clause selecting the stored rows of `source` on a target that
+    a run storing `rows` replaces."""
+    kinds = {_row_kind(row) for row in rows} or {"data"}
+    if len(kinds) != 1:
+        raise ValueError(f"{source}: one run stores one kind of result row, got {kinds}")
+    kind = kinds.pop()
+    if kind != "data":
+        return f"{_ROW_KIND_SQL} = ?", [kind]
+    where, params = f"{_ROW_KIND_SQL} IN ('data', 'parse_warning')", []
+    key = RESULT_RUN_KEYS.get(source)
+    if key is not None:
+        values = {json.dumps(row.get(key)) for row in rows}
+        if len(values) != 1:
+            raise ValueError(f"{source} results replace one {key!r} at a time, got {values}")
+        # A row SQLite can't parse can't be matched by its key: any run replaces it.
+        where += f" AND CASE WHEN json_valid(data) THEN json_extract(data, '$.{key}') IS ? ELSE 1 END"
+        params.append(rows[0].get(key))
+    return where, params
+
+
 class Database:
     """Thin wrapper around sqlite3 with upsert semantics for the scan data model."""
 
@@ -325,6 +379,35 @@ class Database:
             self.conn.execute("ALTER TABLE services ADD COLUMN version TEXT")
         if "cpe" not in existing_columns:
             self.conn.execute("ALTER TABLE services ADD COLUMN cpe TEXT")
+        if self.conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+            self._drop_old_result_runs()
+            self.conn.execute("PRAGMA user_version = 1")
+
+    def _drop_old_result_runs(self) -> None:
+        """Results used to pile up, one more set per rescan; now a run
+        replaces its source's earlier ones (replace_results). Keep only each
+        source's latest run per target and row kind - the rows stored within
+        a minute of its newest (a run stores its rows at once; runs are far
+        apart). A newer parse warning thus never displaces older data."""
+        # A row SQLite can't parse (a NaN) is its own group, so it's kept.
+        part = "CASE WHEN NOT json_valid(data) THEN id ELSE CASE source " + " ".join(
+            f"WHEN '{source}' THEN json_extract(data, '$.{key}')"
+            for source, key in RESULT_RUN_KEYS.items()
+        ) + " END END"
+        self.conn.execute(
+            f"""
+            DELETE FROM results WHERE id IN (
+                SELECT id FROM (
+                    SELECT id, julianday(fetched_at) AS t,
+                           MAX(julianday(fetched_at)) OVER (
+                               PARTITION BY source, target_type, target_id,
+                                            {_ROW_KIND_SQL}, {part}
+                           ) AS newest
+                    FROM results
+                ) WHERE t < newest - 60.0 / 86400
+            )
+            """
+        )
 
     # -- domains ----------------------------------------------------------
 
@@ -526,19 +609,69 @@ class Database:
 
     # -- results --------------------------------------------------------
 
+    _INSERT_RESULT = (
+        "INSERT INTO results (source, target_type, target_id, data, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?)"
+    )
+
     @_locked
     def insert_result(
         self, source: str, target_type: str, target_id: int, data: dict, now: str | None = None
     ) -> int:
-        timestamp = now or _now()
+        """Add one result row. Scans replace instead (replace_results)."""
         cursor = self.conn.execute(
-            "INSERT INTO results (source, target_type, target_id, data, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (source, target_type, target_id, json.dumps(data), timestamp),
+            self._INSERT_RESULT, (source, target_type, target_id, json.dumps(data), now or _now())
         )
         self.conn.commit()
         assert cursor.lastrowid is not None
         return cursor.lastrowid
+
+    @_locked
+    def replace_results(
+        self, source: str, target_type: str, target_id: int, rows: list[dict],
+        now: str | None = None,
+    ) -> None:
+        """Make `rows` `source`'s results on the target: a source's latest run
+        replaces its earlier ones (an empty run clears them).
+
+        For a source in RESULT_RUN_KEYS a run covers one value of that data
+        key - one webtech port, one dnsrecon sweep IP, one cloud scan target -
+        so only rows with the same value are replaced. Rows carrying a
+        RESULT_SIDE_KEYS key are replaced only by their own kind, except that
+        a run's data also clears an earlier run's parse warning."""
+        self.replace_results_on(source, {(target_type, target_id): rows}, now)
+
+    @_locked
+    def replace_results_on(
+        self, source: str, runs: dict[tuple[str, int], list[dict]], now: str | None = None
+    ) -> None:
+        """replace_results for many (target_type, target_id) targets at once,
+        in one transaction - a reader never sees a target half-replaced."""
+        timestamp = now or _now()
+        with self.conn:
+            for (target_type, target_id), rows in runs.items():
+                where, params = _replaced_rows(source, rows)
+                self.conn.execute(
+                    f"DELETE FROM results WHERE source = ? AND target_type = ? "
+                    f"AND target_id = ? AND {where}",
+                    [source, target_type, target_id, *params],
+                )
+                self.conn.executemany(
+                    self._INSERT_RESULT,
+                    [(source, target_type, target_id, json.dumps(row), timestamp) for row in rows],
+                )
+
+    @_locked
+    def delete_result_run(self, source: str, target_type: str, target_id: int, value: Any) -> None:
+        """Drop the rows of a RESULT_RUN_KEYS source's run on one value of its
+        key - e.g. webtech's fingerprint of a port found closed."""
+        key = RESULT_RUN_KEYS[source]
+        self.conn.execute(
+            "DELETE FROM results WHERE source = ? AND target_type = ? AND target_id = ? "
+            f"AND json_valid(data) AND json_extract(data, '$.{key}') IS ?",
+            (source, target_type, target_id, value),
+        )
+        self.conn.commit()
 
     @_locked
     def list_results_for_target(self, target_type: str, target_id: int) -> list[sqlite3.Row]:

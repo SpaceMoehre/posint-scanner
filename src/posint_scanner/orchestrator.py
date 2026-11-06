@@ -306,7 +306,7 @@ def _persist_discovered_hostnames(
         try:
             hostname_id = db.upsert_hostname(domain_id, item.name)
             if item.data:
-                db.insert_result(item.source, "hostname", hostname_id, item.data)
+                db.replace_results(item.source, "hostname", hostname_id, [item.data])
         except Exception:
             logger.exception("failed to persist discovered hostname %s - continuing", item.name)
 
@@ -395,7 +395,7 @@ def _run_collection(
             if result is None:
                 continue  # declined by the governor
             try:
-                db.insert_result(result.source, "domain", domain_id, result.data)
+                db.replace_results(result.source, "domain", domain_id, [result.data])
                 for asset in result.cloud_assets:
                     db.upsert_cloud_asset(
                         domain_id, asset.provider, asset.name, asset.url, asset.exposure, result.source
@@ -611,7 +611,7 @@ def _run_netblock_sweep(
             hostname_id = db.upsert_hostname(domain_id, item.name)
             ip_id = db.upsert_ip(item.data["ip"])
             db.upsert_resolution(hostname_id, ip_id)
-            db.insert_result(item.source, "hostname", hostname_id, item.data)
+            db.replace_results(item.source, "hostname", hostname_id, [item.data])
         except Exception:
             logger.exception(
                 "failed to persist netblock-swept hostname %s - continuing", item.name
@@ -644,20 +644,31 @@ def _persist_tool_reports(db: Database, domain_id: int, result: EnrichmentResult
         db.save_tool_output(domain_id, item.tool, item.target, item.report)
 
 
+class _ReportSink:
+    """Stores a tool run's raw report against the domain, keyed by `target`
+    when given, else by what the scanner reports it ran against - and records
+    that the run completed. Scanners return [] both when they found nothing
+    and when they couldn't run (binary missing, timeout, no sandbox), but only
+    a completed run hands over its report; only that may replace the
+    findings stored by an earlier run."""
+
+    def __init__(self, db: Database, domain_id: int, tool: str, target: str | None) -> None:
+        self.db, self.domain_id, self.tool, self.target = db, domain_id, tool, target
+        self.completed = False
+
+    def __call__(self, reported: str, report: Report | None) -> None:
+        self.completed = True
+        key = self.target or reported
+        try:
+            self.db.save_tool_output(self.domain_id, self.tool, key, report)
+        except Exception:
+            logger.exception("failed to store %s report for %s - continuing", self.tool, key)
+
+
 def _report_sink(
     db: Database, domain_id: int, tool: str, target: str | None = None
-) -> toolrun.ReportSink:
-    """Stores a tool run's raw report against the domain, keyed by `target`
-    when given, else by what the scanner reports it ran against."""
-
-    def sink(reported: str, report: Report | None) -> None:
-        key = target or reported
-        try:
-            db.save_tool_output(domain_id, tool, key, report)
-        except Exception:
-            logger.exception("failed to store %s report for %s - continuing", tool, key)
-
-    return sink
+) -> _ReportSink:
+    return _ReportSink(db, domain_id, tool, target)
 
 
 def _run_enrichment(
@@ -734,7 +745,8 @@ def _run_enrichment(
                     exc,
                 )
                 try:
-                    db.insert_result(source.name, target_type, target_id, {"parse_warning": str(exc)})
+                    db.replace_results(source.name, target_type, target_id,
+                                       [{"parse_warning": str(exc)}])
                 except Exception:
                     logger.exception("failed to persist %s parse warning - continuing", source.name)
                 continue
@@ -747,7 +759,7 @@ def _run_enrichment(
                 related.append((source.name, target_label, result.related_hostnames))
 
             try:
-                db.insert_result(result.source, target_type, target_id, result.data)
+                db.replace_results(result.source, target_type, target_id, [result.data])
                 _persist_code_exposures(db, domain_id, result)
                 _persist_tool_reports(db, domain_id, result)
                 if target_type == "ip":
@@ -798,7 +810,8 @@ def _absorb_related(
                 if db.get_hostname_by_name(name) is not None:
                     continue
                 hostname_id = db.upsert_hostname(domain_id, name)
-                db.insert_result(source_name, "hostname", hostname_id, {"related_to": target_label})
+                db.replace_results(source_name, "hostname", hostname_id,
+                                   [{"related_to": target_label}])
                 new_ids.add(hostname_id)
             except Exception:
                 logger.exception("failed to persist related hostname %s - continuing", name)
@@ -897,7 +910,9 @@ def _run_port_verification(db: Database, domain_id: int, enabled: bool) -> None:
         try:
             for port in closed:
                 db.delete_service(ip_id, port, "tcp")
-            db.insert_result("port_verify", "ip", ip_id, {"open": opened, "closed": closed})
+                # Its fingerprint would keep feeding the CVE lookup otherwise.
+                db.delete_result_run("webtech", "ip", ip_id, port)
+            db.replace_results("port_verify", "ip", ip_id, [{"open": opened, "closed": closed}])
             dropped += len(closed)
         except Exception:
             logger.exception("failed to persist port verification for IP %s - continuing", ip_id)
@@ -964,12 +979,7 @@ def _run_tech_fingerprint(
                 ck.mark(step)
                 continue
             try:
-                db.insert_result(
-                    "webtech",
-                    "ip",
-                    ip_id,
-                    {"port": service["port"], **result},
-                )
+                db.replace_results("webtech", "ip", ip_id, [{"port": service["port"], **result}])
                 # Write the fingerprinted web-server product/version back onto
                 # the service. upsert_service COALESCEs, so this only fills
                 # gaps (a version Shodan didn't have) - it never overwrites a
@@ -1051,17 +1061,6 @@ def _php_cpe_checks(
         seen.add((port, cpe))
         checks.append((port, "PHP", release, [cpe]))
     return checks
-
-
-def _replace_nvd_results(db: Database, ip_id: int, rows: list[tuple[int, dict]]) -> None:
-    """Swap the IP's stored CVE results for this lookup's: an earlier scan's
-    rows may be for a version no longer running, or (from older versions of
-    the lookup) for CVEs that don't state an affected version at all."""
-    for row in db.list_results_for_target("ip", ip_id):
-        if row["source"] == "nvd":
-            db.delete_result(row["id"])
-    for port, data in rows:
-        db.insert_result("nvd", "ip", ip_id, {"port": port, **data})
 
 
 def _run_vulnerability_lookup(
@@ -1213,7 +1212,10 @@ def _run_vulnerability_lookup(
                 )
                 continue
             try:
-                _replace_nvd_results(db, ip_row["id"], rows)
+                # Swaps out the IP's earlier CVE results too: they may be for
+                # a version no longer running.
+                db.replace_results(
+                    "nvd", "ip", ip_row["id"], [{"port": port, **data} for port, data in rows])
             except Exception:
                 logger.exception(
                     "failed to persist nvd results for %s - continuing", ip_row["address"]
@@ -1261,21 +1263,18 @@ def _run_nuclei(
             targets = _nuclei_targets_for_ip(db, ip_row["id"])
             if not targets or ck.done(step):
                 continue
+            report = _report_sink(db, domain_id, "nuclei", ip_row["address"])
             try:
-                findings = scanner.scan(
-                    targets, report=_report_sink(db, domain_id, "nuclei", ip_row["address"])
-                )
+                findings = scanner.scan(targets, report=report)
             except Exception:
                 logger.exception("nuclei scan failed for %s - continuing", ip_row["address"])
                 continue
-            for finding in findings:
-                try:
-                    db.insert_result("nuclei", "ip", ip_row["id"], finding)
-                except Exception:
-                    logger.exception(
-                        "failed to persist nuclei finding %s for %s - continuing",
-                        finding.get("template_id"), ip_row["address"],
-                    )
+            try:
+                if report.completed:
+                    db.replace_results("nuclei", "ip", ip_row["id"], findings)
+            except Exception:
+                logger.exception(
+                    "failed to persist nuclei findings for %s - continuing", ip_row["address"])
             ck.mark(step)
             if findings:
                 logger.info(
@@ -1341,19 +1340,20 @@ def _run_web_app_scan(
                 step = f"{name}:{ip_row['address']}"
                 if ck.done(step):
                     continue
+                report = _report_sink(db, domain_id, name)
                 try:
-                    findings = scanner.scan(targets, report=_report_sink(db, domain_id, name))
+                    findings = scanner.scan(targets, report=report)
                 except Exception:
                     logger.exception("%s scan failed for %s - continuing", name, ip_row["address"])
                     continue
-                for finding in findings:
-                    try:
-                        db.insert_result(name, "ip", ip_row["id"], finding)
-                    except Exception:
-                        logger.exception(
-                            "failed to persist %s finding for %s - continuing",
-                            name, ip_row["address"],
-                        )
+                try:
+                    if report.completed:
+                        db.replace_results(name, "ip", ip_row["id"], findings)
+                except Exception:
+                    logger.exception(
+                        "failed to persist %s findings for %s - continuing",
+                        name, ip_row["address"],
+                    )
                 ck.mark(step)
                 if findings:
                     logger.info(
@@ -1387,17 +1387,15 @@ def _run_php2shell(
             )
             if not targets or ck.done(step):
                 continue
+            report = _report_sink(db, domain_id, "php2shell")
             try:
-                findings = scanner.scan(targets, report=_report_sink(db, domain_id, "php2shell"))
+                findings = scanner.scan(targets, report=report)
             except Exception:
                 logger.exception("php2shell check failed for %s - continuing", ip_row["address"])
                 continue
             try:
-                for row in db.list_results_for_target("ip", ip_row["id"]):
-                    if row["source"] == "php2shell":
-                        db.delete_result(row["id"])
-                for finding in findings:
-                    db.insert_result("php2shell", "ip", ip_row["id"], finding)
+                if report.completed:
+                    db.replace_results("php2shell", "ip", ip_row["id"], findings)
                 ck.mark(step)
             except Exception:
                 logger.exception(
@@ -1424,22 +1422,26 @@ def _run_takeover(
     hostname_ids = {row["name"]: row["id"] for row in db.list_hostnames_for_domain(domain_id)}
     if not hostname_ids:
         return
+    report = _report_sink(db, domain_id, "takeover", domain)
     try:
-        findings = scanner.scan(
-            list(hostname_ids), report=_report_sink(db, domain_id, "takeover", domain)
-        )
+        findings = scanner.scan(list(hostname_ids), report=report)
     except Exception:
         logger.exception("takeover scan failed for domain %s - continuing", domain_id)
         return
+    if not report.completed:
+        return  # it didn't run: the earlier run's findings stand
+    # This run's findings per target; every scanned hostname (and the domain)
+    # gets them, an empty list clearing an earlier run's.
+    by_target: dict[tuple[str, int], list[dict]] = {("domain", domain_id): []}
+    by_target.update({("hostname", hostname_id): [] for hostname_id in hostname_ids.values()})
     for finding in findings:
         host = finding.get("resource") or ""
-        target_type, target_id = ("hostname", hostname_ids.get(host)) if host in hostname_ids else (
-            "domain", domain_id
-        )
-        try:
-            db.insert_result("takeover", target_type, target_id, finding)
-        except Exception:
-            logger.exception("failed to persist takeover finding for %s - continuing", host)
+        target = ("hostname", hostname_ids[host]) if host in hostname_ids else ("domain", domain_id)
+        by_target[target].append(finding)
+    try:
+        db.replace_results_on("takeover", by_target)
+    except Exception:
+        logger.exception("failed to persist takeover findings for %s - continuing", domain)
     if findings:
         logger.info("takeover: %d potential takeover(s) for domain %s", len(findings), domain_id)
 
@@ -1499,22 +1501,21 @@ def _image_refs_to_scan(
 
 
 def _persist_cloud_findings(
-    db: Database, domain_id: int, source: str, target: str, target_kind: str, findings: list[dict]
+    db: Database, domain_id: int, source: str, target: str, target_kind: str,
+    findings: list[dict], report: _ReportSink,
 ) -> None:
-    if not findings:
+    """Store a cloud/IaC run's findings on `target` in place of the earlier
+    run's - even none, if the tool completed; if it didn't, the earlier ones
+    stand."""
+    if not report.completed:
         return
     try:
-        db.insert_result(
-            source,
-            "domain",
-            domain_id,
-            {
-                "target": target,
-                "target_kind": target_kind,
-                "findings": findings,
-                "counts": count_by_severity(findings),
-            },
-        )
+        db.replace_results(source, "domain", domain_id, [{
+            "target": target,
+            "target_kind": target_kind,
+            "findings": findings,
+            "counts": count_by_severity(findings),
+        }])
     except Exception:
         logger.exception("failed to persist %s findings for %s - continuing", source, target)
 
@@ -1542,12 +1543,13 @@ def _run_artifact_scan(
         for ref in _image_refs_to_scan(db, domain_id, domain, cfg):
             if ck.done(f"trivy-image:{ref}"):
                 continue
+            report = _report_sink(db, domain_id, "trivy")
             try:
-                findings = trivy.scan_image(ref, report=_report_sink(db, domain_id, "trivy"))
+                findings = trivy.scan_image(ref, report=report)
             except Exception:
                 logger.exception("trivy image scan failed for %s - continuing", ref)
                 continue
-            _persist_cloud_findings(db, domain_id, "trivy", ref, "image", findings)
+            _persist_cloud_findings(db, domain_id, "trivy", ref, "image", findings, report)
             ck.mark(f"trivy-image:{ref}")
             if findings:
                 logger.info("trivy: %d finding(s) in image %s", len(findings), ref)
@@ -1568,25 +1570,23 @@ def _run_artifact_scan(
             ):
                 continue
             if checkov.available:
+                report = _report_sink(db, domain_id, "checkov", url)
                 try:
-                    findings = checkov.scan_dir(
-                        str(dest), report=_report_sink(db, domain_id, "checkov", url)
-                    )
+                    findings = checkov.scan_dir(str(dest), report=report)
                 except Exception:
                     logger.exception("checkov scan failed for %s - continuing", url)
                     findings = []
-                _persist_cloud_findings(db, domain_id, "checkov", url, "repo", findings)
+                _persist_cloud_findings(db, domain_id, "checkov", url, "repo", findings, report)
                 if findings:
                     logger.info("checkov: %d finding(s) in %s", len(findings), url)
             if trivy.available:
+                report = _report_sink(db, domain_id, "trivy", url)
                 try:
-                    findings = trivy.scan_fs(
-                        str(dest), report=_report_sink(db, domain_id, "trivy", url)
-                    )
+                    findings = trivy.scan_fs(str(dest), report=report)
                 except Exception:
                     logger.exception("trivy fs scan failed for %s - continuing", url)
                     findings = []
-                _persist_cloud_findings(db, domain_id, "trivy", url, "repo", findings)
+                _persist_cloud_findings(db, domain_id, "trivy", url, "repo", findings, report)
                 if findings:
                     logger.info("trivy fs: %d finding(s) in %s", len(findings), url)
         ck.mark(f"repo:{url}")
@@ -1615,12 +1615,14 @@ def _run_cloud_audit(
             step = f"{source}:{provider}"
             if not scanner.available or ck.done(step):
                 continue
+            report = _report_sink(db, domain_id, source)
             try:
-                findings = scanner.scan(provider, report=_report_sink(db, domain_id, source))
+                findings = scanner.scan(provider, report=report)
             except Exception:
                 logger.exception("%s audit of %s failed - continuing", source, provider)
                 continue
-            _persist_cloud_findings(db, domain_id, source, provider, "cloud-account", findings)
+            _persist_cloud_findings(
+                db, domain_id, source, provider, "cloud-account", findings, report)
             ck.mark(step)
             logger.info("%s: %d finding(s) for %s", source, len(findings), provider)
 
