@@ -298,6 +298,12 @@ class Database:
         self.conn.close()
 
     @_locked
+    def query(self, sql: str, params: tuple | list = ()) -> list[sqlite3.Row]:
+        """Run one read. The read model (readmodel/queries.py) builds its
+        set-based queries with this rather than a method per shape."""
+        return self.conn.execute(sql, params).fetchall()
+
+    @_locked
     def init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
         self._upgrade_schema()

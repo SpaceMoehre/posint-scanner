@@ -47,7 +47,7 @@ from posint_scanner.settings import (
     source_key_groups,
     source_secret_fields,
 )
-from posint_scanner.web import views
+from posint_scanner.readmodel import views
 from posint_scanner.web.scans import ScanManager, ScanOptions
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"

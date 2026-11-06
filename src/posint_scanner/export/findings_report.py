@@ -20,8 +20,10 @@ from datetime import datetime, timezone
 
 from posint_scanner.cloudscan import SEVERITIES, severity_rank
 from posint_scanner.db import Database
+from posint_scanner.export.obsidian_export import _flatten_nvd_vulns
 from posint_scanner.export.overview import _collect, severity_of
-from posint_scanner.web.views import _overview_hosts, build_domain, build_ip
+from posint_scanner.readmodel import domain_findings, ip_findings, queries
+from posint_scanner.readmodel.queries import Scope
 
 # Locations listed per merged finding before "+N more".
 MAX_WHERE = 8
@@ -51,10 +53,9 @@ def _finding(severity: object, category: str, title: str, where: str,
     }
 
 
-def _ip_findings(db: Database, address: str, host: dict) -> list[dict]:
-    ip = build_ip(db, address)
-    if ip is None:
-        return []
+def _ip_findings(host: dict) -> list[dict]:
+    ip = ip_findings(host["results"])
+    address = host["address"]
     names = host["hostnames"]
     label = address + (f" ({', '.join(names[:3])}{', …' if len(names) > 3 else ''})" if names else "")
     out = []
@@ -92,10 +93,7 @@ def _ip_findings(db: Database, address: str, host: dict) -> list[dict]:
     return out
 
 
-def _domain_findings(db: Database, name: str) -> list[dict]:
-    d = build_domain(db, name)
-    if d is None:
-        return []
+def _domain_findings(name: str, d: dict, secrets: list) -> list[dict]:
     out = []
     for f in d["takeovers"]:
         out.append(_finding(f.get("severity"), "Subdomain takeover",
@@ -109,13 +107,12 @@ def _domain_findings(db: Database, name: str) -> list[dict]:
         out.append(_finding(f.get("severity"), "LeakIX", f.get("title"), name, f.get("detail")))
     for f in (d["email_auth"] or {}).get("findings") or []:
         out.append(_finding(f.get("severity"), "Email auth", f.get("title"), name, f.get("detail")))
-    for e in d["code_exposures"]:
-        if e["kind"] == "secret":
-            out.append(_finding(
-                "high", "Leaked secret", f"{e['rule'] or 'Secret'} in public code",
-                f"{e['repo']}/{e['path']}" + (f":{e['line']}" if e["line"] else ""),
-                f"value {_mask(e['secret'])} (names {e['target']})", e["url"],
-            ))
+    for e in secrets:
+        out.append(_finding(
+            "high", "Leaked secret", f"{e['rule'] or 'Secret'} in public code",
+            f"{e['repo']}/{e['path']}" + (f":{e['line']}" if e["line"] else ""),
+            f"value {_mask(e['secret'])} (names {e['target']})", e["url"],
+        ))
     origin = d["origin"] or {}
     if origin.get("behind_cdn"):
         for c in origin.get("origin_candidates") or []:
@@ -144,18 +141,29 @@ def _merge(findings: list[dict]) -> list[dict]:
 def collect_findings(db: Database, domains: Collection[str] | None = None) -> dict:
     """Findings (merged), sensitive-service exposures and scope counts for
     `domains` (None: everything, IPs no domain claims included)."""
-    known = [row["name"] for row in db.list_domains()]
-    scope = known if domains is None else [d for d in known if d in set(domains)]
-    hosts = [h for h in _overview_hosts(db)
-             if domains is None or set(h["domains"]) & set(scope)]
-    findings = []
-    for name in scope:
-        findings += _domain_findings(db, name)
+    ids = queries.domain_ids(db, domains)
+    hosts = queries.hosts(db, Scope() if domains is None else Scope.domains(ids.values()))
     for host in hosts:
-        findings += _ip_findings(db, host["address"], host)
+        host["vulns"] = _flatten_nvd_vulns([(r["source"], r["data"]) for r in host["results"]])
+    results = queries.domain_results(db, ids.values())
+    takeovers = queries.hostname_results_by_domain(db, ids.values(), ["takeover"])
+    secrets: dict[int, list] = {}
+    if ids:
+        for row in db.query(
+            "SELECT * FROM code_exposures WHERE kind = 'secret' "
+            f"AND domain_id IN ({', '.join('?' * len(ids))}) ORDER BY repo, path",
+            tuple(ids.values()),
+        ):
+            secrets.setdefault(row["domain_id"], []).append(row)
+    findings = []
+    for name, domain_id in ids.items():
+        d = domain_findings(results.get(domain_id, []), takeovers.get(domain_id, []))
+        findings += _domain_findings(name, d, secrets.get(domain_id, []))
+    for host in hosts:
+        findings += _ip_findings(host)
     exposures, _, _ = _collect(hosts)
     return {
-        "domains": scope,
+        "domains": list(ids),
         "all_domains": domains is None,
         "ip_count": len(hosts),
         "hostname_count": len({n for h in hosts for n in h["hostnames"]}),

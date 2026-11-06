@@ -20,6 +20,8 @@ from posint_scanner.export.overview import (
     severity_of,
 )
 from posint_scanner import snmp
+from posint_scanner.readmodel import queries
+from posint_scanner.readmodel.queries import Scope
 from posint_scanner.scope import tld_family
 from posint_scanner.sources.portscan import TLS_PORTS
 
@@ -89,23 +91,12 @@ def web_url(address: str, service: dict, webtech_urls: dict[int, str]) -> str | 
     return f"{scheme}://{host}/" if port == default else f"{scheme}://{host}:{port}/"
 
 
-def _overview_hosts(db: Database) -> list[dict]:
-    domain_names = {row["id"]: row["name"] for row in db.list_domains()}
-    hosts = []
-    for ip_row in db.list_all_ips():
-        results = _results_for(db, "ip", ip_row["id"])
-        hostname_rows = db.list_hostnames_for_ip(ip_row["id"])
-        hosts.append(
-            {
-                "address": ip_row["address"],
-                "hostnames": [r["name"] for r in hostname_rows],
-                # An IP belongs to every apex domain one of its hostnames sits
-                # under; IPs with no hostname (e.g. netblock-sweep hits) get none.
-                "domains": sorted({domain_names[r["domain_id"]] for r in hostname_rows}),
-                "services": [dict(s) for s in db.list_services_for_ip(ip_row["id"])],
-                "vulns": _flatten_nvd_vulns([(r["source"], r["data"]) for r in results]),
-            }
-        )
+def _hosts(db: Database, scope: Scope) -> list[dict]:
+    """The IPs in `scope` as the overview groups them: hostnames, domains,
+    services and flattened CVEs (only `nvd` results are read)."""
+    hosts = queries.hosts(db, scope, ["nvd"])
+    for host in hosts:
+        host["vulns"] = _flatten_nvd_vulns([(r["source"], r["data"]) for r in host["results"]])
     return hosts
 
 
@@ -113,14 +104,18 @@ def build_overview(db: Database, domain: str | None = None) -> dict:
     """Summary counts + the three finding lists (exposures, vuln rows,
     criticals), exactly as the `_Overview.md` note is built. `domain`
     narrows everything to IPs attributed to that apex domain."""
-    all_hosts = _overview_hosts(db)
-    hosts = [h for h in all_hosts if domain in h["domains"]] if domain else all_hosts
+    names = [row["name"] for row in db.list_domains()]
+    scope = Scope.domains(queries.domain_ids(db, [domain]).values()) if domain else Scope()
+    hosts = _hosts(db, scope)
     exposures, vuln_rows, criticals = _collect(hosts)
+    unattributed = db.query(
+        "SELECT COUNT(*) AS n FROM ip_addresses WHERE id NOT IN (SELECT ip_id FROM resolutions)"
+    )[0]["n"]
     return {
         "cves": _cve_rows(hosts),
-        "domains": [row["name"] for row in db.list_domains()],
+        "domains": names,
         "selected_domain": domain,
-        "unattributed_ips": sum(1 for h in all_hosts if not h["domains"]),
+        "unattributed_ips": unattributed,
         "total_ips": len(hosts),
         "hosts_with_exposure": len({e["address"] for e in exposures}),
         "exposures": exposures,
@@ -184,21 +179,24 @@ def build_dashboard(db: Database) -> dict:
     a single domain each. User groups come first; the other domains are
     grouped with their TLD siblings (example.com + example.de) when they
     have any."""
-    hosts = _overview_hosts(db)
+    hosts = _hosts(db, Scope())
+    by_domain: dict[str, list[dict]] = {}
+    for host in hosts:
+        for name in host["domains"]:
+            by_domain.setdefault(name, []).append(host)
+    hostname_counts = queries.count_by_domain(db, "hostnames")
+    secret_counts = queries.count_by_domain(db, "code_exposures", "AND kind = 'secret'")
     domains = []
-    total_hosts = 0
     for domain_row in db.list_domains():
-        hostname_rows = db.list_hostnames_for_domain(domain_row["id"])
-        total_hosts += len(hostname_rows)
-        domain_hosts = [h for h in hosts if domain_row["name"] in h["domains"]]
+        domain_hosts = by_domain.get(domain_row["name"], [])
         domains.append(
             {
                 "name": domain_row["name"],
                 "added_at": domain_row["added_at"],
                 "hosts": domain_hosts,
-                "hostname_count": len(hostname_rows),
+                "hostname_count": hostname_counts.get(domain_row["id"], 0),
                 **_host_stats(domain_hosts),
-                "secret_count": db.count_secret_exposures(domain_row["id"]),
+                "secret_count": secret_counts.get(domain_row["id"], 0),
             }
         )
 
@@ -231,8 +229,34 @@ def build_dashboard(db: Database) -> dict:
         "domains": domains,
         "entries": entries,
         "group_names": sorted(user, key=str.lower),
-        "total_hosts": total_hosts,
-        "total_ips": len(db.list_all_ips()),
+        "total_hosts": sum(hostname_counts.values()),
+        "total_ips": len(hosts),
+    }
+
+
+def domain_findings(results: list[dict], takeovers: list[dict]) -> dict:
+    """What a domain's own results say (the domain page's finding panels and
+    the findings report's domain part). `takeovers` are the takeover results
+    on its hostnames."""
+    def first(source: str) -> dict | None:
+        return next((r["data"] for r in results if r["source"] == source), None)
+
+    return {
+        "lookalikes": (first("lookalike") or {}).get("registered", []),
+        "origin": first("origin_ip"),
+        "email_auth": first("email_auth"),
+        # Already severity-sorted by the source (leakix.parse_events).
+        "leakix_findings": [
+            finding
+            for r in results
+            if r["source"] == "leakix"
+            for finding in r["data"].get("findings") or []
+        ],
+        # Takeover findings live on their hostname, but any that didn't map back
+        # to a known hostname were persisted on the domain - include both.
+        "takeovers": [r["data"] for r in takeovers]
+        + [r["data"] for r in results if r["source"] == "takeover"],
+        "cloud_findings": cloud_findings(results),
     }
 
 
@@ -240,23 +264,32 @@ def build_domain(db: Database, name: str) -> dict | None:
     domain_row = db.get_domain_by_name(name)
     if domain_row is None:
         return None
-    # Per-IP detail, fetched once per IP however many hostnames share it.
+    domain_id = domain_row["id"]
+    scope = Scope.domains([domain_id])
+    ip_services = queries.services(db, scope)
+    nvd = queries.ip_results(db, scope, ["nvd"])
+    resolved = db.query(
+        "SELECT r.hostname_id, i.id, i.address FROM resolutions r "
+        "JOIN ip_addresses i ON i.id = r.ip_id JOIN hostnames h ON h.id = r.hostname_id "
+        "WHERE h.domain_id = ? ORDER BY i.address",
+        (domain_id,),
+    )
+    ips_of: dict[int, list] = {}
+    for row in resolved:
+        ips_of.setdefault(row["hostname_id"], []).append(row)
+    # Per-IP detail, built once per IP however many hostnames share it.
     ips: dict[str, dict] = {}
     hostnames = []
-    takeovers: list[dict] = []
-    for h in db.list_hostnames_for_domain(domain_row["id"]):
-        takeovers += [
-            r["data"] for r in _results_for(db, "hostname", h["id"]) if r["source"] == "takeover"
-        ]
+    for h in db.list_hostnames_for_domain(domain_id):
         addresses = []
-        for ip_row in db.list_ips_for_hostname(h["id"]):
+        for ip_row in ips_of.get(h["id"], []):
             address = ip_row["address"]
             addresses.append(address)
             if address not in ips:
-                results = _results_for(db, "ip", ip_row["id"])
                 ips[address] = {
-                    "services": [dict(s) for s in db.list_services_for_ip(ip_row["id"])],
-                    "vulns": _flatten_nvd_vulns([(r["source"], r["data"]) for r in results]),
+                    "services": ip_services.get(ip_row["id"], []),
+                    "vulns": _flatten_nvd_vulns(
+                        [(r["source"], r["data"]) for r in nvd.get(ip_row["id"], [])]),
                     "hostnames": [],
                 }
             ips[address]["hostnames"].append(h["name"])
@@ -286,43 +319,27 @@ def build_domain(db: Database, name: str) -> dict | None:
         for service in info["services"]
     ]
     candidates = [
-        {**dict(row), "scanned": db.get_domain_by_name(row["name"]) is not None}
-        for row in db.list_candidate_domains(domain_row["id"])
+        {**dict(row), "scanned": bool(row["scanned"])}
+        for row in db.query(
+            "SELECT c.*, d.id IS NOT NULL AS scanned FROM candidate_domains c "
+            "LEFT JOIN domains d ON d.name = c.name WHERE c.domain_id = ? ORDER BY c.name",
+            (domain_id,),
+        )
     ]
-    domain_results = _results_for(db, "domain", domain_row["id"])
-    lookalikes = next(
-        (r["data"].get("registered", []) for r in domain_results if r["source"] == "lookalike"),
-        [],
-    )
-    origin = next((r["data"] for r in domain_results if r["source"] == "origin_ip"), None)
-    email_auth = next((r["data"] for r in domain_results if r["source"] == "email_auth"), None)
-    # Already severity-sorted by the source (leakix.parse_events).
-    leakix_findings = [
-        finding
-        for r in domain_results
-        if r["source"] == "leakix"
-        for finding in r["data"].get("findings") or []
-    ]
-    # Takeover findings live on their hostname, but any that didn't map back to
-    # a known hostname were persisted on the domain - include both.
-    takeovers += [r["data"] for r in domain_results if r["source"] == "takeover"]
+    results = queries.domain_results(db, [domain_id]).get(domain_id, [])
+    takeovers = queries.hostname_results_by_domain(db, [domain_id], ["takeover"])
     return {
         "name": name,
         "hostnames": hostnames,
         "services": services,
         "ip_count": len(ips),
         "candidates": candidates,
-        "lookalikes": lookalikes,
-        "origin": origin,
-        "email_auth": email_auth,
-        "leakix_findings": leakix_findings,
-        "results": domain_results,
-        "takeovers": takeovers,
-        "cloud_findings": cloud_findings(domain_results),
-        "cloud_assets": [dict(row) for row in db.list_cloud_assets(domain_row["id"])],
-        "code_exposures": [dict(row) for row in db.list_code_exposures(domain_row["id"])],
-        "email_addresses": [dict(row) for row in db.list_email_addresses(domain_row["id"])],
-        "tool_outputs": [dict(row) for row in db.list_tool_outputs(domain_row["id"])],
+        **domain_findings(results, takeovers.get(domain_id, [])),
+        "results": results,
+        "cloud_assets": [dict(row) for row in db.list_cloud_assets(domain_id)],
+        "code_exposures": [dict(row) for row in db.list_code_exposures(domain_id)],
+        "email_addresses": [dict(row) for row in db.list_email_addresses(domain_id)],
+        "tool_outputs": [dict(row) for row in db.list_tool_outputs(domain_id)],
     }
 
 
@@ -350,11 +367,20 @@ def _tls_grade(data: dict, address: str) -> str | None:
 def _ip_hostnames(db: Database, ip_id: int, address: str) -> list[dict]:
     """Everything known per hostname pointing at this IP - the IP page is the
     only place hostname-level results are shown."""
+    on_ip = "SELECT hostname_id FROM resolutions WHERE ip_id = ?"
+    results = queries.hostname_results(db, on_ip, (ip_id,))
+    other_ips: dict[int, list[str]] = {}
+    for row in db.query(
+        "SELECT r.hostname_id, i.address FROM resolutions r JOIN ip_addresses i ON i.id = r.ip_id "
+        f"WHERE r.hostname_id IN ({on_ip}) AND r.ip_id != ? ORDER BY i.address",
+        (ip_id, ip_id),
+    ):
+        other_ips.setdefault(row["hostname_id"], []).append(row["address"])
     hosts = []
     for h in db.list_hostnames_for_ip(ip_id):
-        results = _results_for(db, "hostname", h["id"])
+        own = results.get(h["id"], [])
         grades = [
-            g for r in results if r["source"] == "qualys_ssllabs"
+            g for r in own if r["source"] == "qualys_ssllabs"
             if (g := _tls_grade(r["data"], address))
         ]
         hosts.append(
@@ -362,12 +388,10 @@ def _ip_hostnames(db: Database, ip_id: int, address: str) -> list[dict]:
                 "name": h["name"],
                 "first_seen": h["first_seen"],
                 "last_seen": h["last_seen"],
-                "other_ips": [
-                    i["address"] for i in db.list_ips_for_hostname(h["id"]) if i["id"] != ip_id
-                ],
-                "found_by": sorted({r["source"] for r in results if r["source"] != "qualys_ssllabs"}),
+                "other_ips": other_ips.get(h["id"], []),
+                "found_by": sorted({r["source"] for r in own if r["source"] != "qualys_ssllabs"}),
                 "tls_grade": grades[-1] if grades else None,
-                "results": results,
+                "results": own,
             }
         )
     return hosts
@@ -390,15 +414,54 @@ def snmp_findings(results: list[dict]) -> list[dict]:
     return out
 
 
+def ip_findings(results: list[dict]) -> dict:
+    """What an IP's results say, per kind (the IP page's finding tables and
+    the findings report's IP part), each most severe first."""
+    # Attach a normalized severity to every CVE so the template can style it.
+    vulns = _flatten_nvd_vulns([(r["source"], r["data"]) for r in results])
+    for vuln in vulns:
+        vuln["severity"] = severity_of(vuln)
+    return {
+        "snmp": snmp_findings(results),
+        "vulns": sorted(vulns, key=lambda v: -(v.get("cvss_score") or 0)),
+        "nuclei": sorted(
+            (r["data"] for r in results if r["source"] == "nuclei"),
+            key=lambda f: _NUCLEI_SEVERITY_ORDER.get((f.get("severity") or "unknown").lower(), 9),
+        ),
+        "web_findings": web_findings(results),
+        "header_findings": sorted(
+            (
+                {**finding, "url": r["data"].get("url")}
+                for r in results
+                if r["source"] == "webtech"
+                for finding in (r["data"].get("security_headers") or {}).get("findings") or []
+            ),
+            key=lambda f: severity_rank(f.get("severity")),
+        ),
+        # Already severity-sorted by the source (leakix.parse_events).
+        "leakix_findings": [
+            finding
+            for r in results
+            if r["source"] == "leakix"
+            for finding in r["data"].get("findings") or []
+        ],
+        "container_exposures": sorted(
+            (
+                exposure
+                for r in results
+                if r["source"] == "container_exposure"
+                for exposure in r["data"].get("exposures") or []
+            ),
+            key=lambda e: severity_rank(e.get("severity")),
+        ),
+    }
+
+
 def build_ip(db: Database, address: str) -> dict | None:
     row = db.get_ip_by_address(address)
     if row is None:
         return None
     results = _results_for(db, "ip", row["id"])
-    # Attach a normalized severity to every CVE so the template can style it.
-    vulns = _flatten_nvd_vulns([(r["source"], r["data"]) for r in results])
-    for vuln in vulns:
-        vuln["severity"] = severity_of(vuln)
     webtech_urls = {
         r["data"]["port"]: r["data"]["url"]
         for r in results
@@ -407,48 +470,13 @@ def build_ip(db: Database, address: str) -> dict | None:
     services = [dict(s) for s in db.list_services_for_ip(row["id"])]
     for service in services:
         service["web_url"] = web_url(address, service, webtech_urls)
-    nuclei = sorted(
-        (r["data"] for r in results if r["source"] == "nuclei"),
-        key=lambda f: _NUCLEI_SEVERITY_ORDER.get((f.get("severity") or "unknown").lower(), 9),
-    )
-    container_exposures = sorted(
-        (
-            exposure
-            for r in results
-            if r["source"] == "container_exposure"
-            for exposure in r["data"].get("exposures") or []
-        ),
-        key=lambda e: severity_rank(e.get("severity")),
-    )
-    header_findings = sorted(
-        (
-            {**finding, "url": r["data"].get("url")}
-            for r in results
-            if r["source"] == "webtech"
-            for finding in (r["data"].get("security_headers") or {}).get("findings") or []
-        ),
-        key=lambda f: severity_rank(f.get("severity")),
-    )
-    # Already severity-sorted by the source (leakix.parse_events).
-    leakix_findings = [
-        finding
-        for r in results
-        if r["source"] == "leakix"
-        for finding in r["data"].get("findings") or []
-    ]
     return {
         "address": address,
-        "snmp": snmp_findings(results),
         "first_seen": row["first_seen"],
         "last_seen": row["last_seen"],
         "hostnames": _ip_hostnames(db, row["id"], address),
         "services": services,
         "results": results,
-        "vulns": sorted(vulns, key=lambda v: -(v.get("cvss_score") or 0)),
-        "nuclei": nuclei,
-        "web_findings": web_findings(results),
-        "header_findings": header_findings,
-        "leakix_findings": leakix_findings,
-        "container_exposures": container_exposures,
+        **ip_findings(results),
         "code_exposures": [dict(r) for r in db.list_code_exposures_for_target(address)],
     }

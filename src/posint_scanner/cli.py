@@ -552,7 +552,7 @@ def overview(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
 ) -> None:
     """Show the security overview (exposed services, vulnerabilities, critical findings) from the database."""
-    from posint_scanner.web.views import build_overview
+    from posint_scanner.readmodel import build_overview
     import json as jsonlib
 
     with Database(db_path) as db:
@@ -603,7 +603,7 @@ def dashboard(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
 ) -> None:
     """Show the dashboard summary (per-domain stats) from the database."""
-    from posint_scanner.web.views import build_dashboard
+    from posint_scanner.readmodel import build_dashboard
     import json as jsonlib
 
     with Database(db_path) as db:
@@ -626,7 +626,7 @@ def domain(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
 ) -> None:
     """Show detailed domain information from the database."""
-    from posint_scanner.web.views import build_domain
+    from posint_scanner.readmodel import build_domain
     import json as jsonlib
 
     with Database(db_path) as db:
@@ -659,7 +659,7 @@ def ip(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
 ) -> None:
     """Show detailed IP information from the database."""
-    from posint_scanner.web.views import build_ip
+    from posint_scanner.readmodel import build_ip
     import json as jsonlib
 
     with Database(db_path) as db:

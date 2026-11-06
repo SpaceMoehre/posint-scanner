@@ -724,7 +724,7 @@ class TestDomainGroups:
         return TestClient(app)
 
     def test_tld_siblings_are_grouped(self):
-        from posint_scanner.web.views import build_dashboard
+        from posint_scanner.readmodel import build_dashboard
 
         with Database(":memory:") as db:
             db.init_schema()
@@ -738,7 +738,7 @@ class TestDomainGroups:
         ]
 
     def test_group_counts_shared_ips_once(self, grouped_client):
-        from posint_scanner.web.views import build_dashboard
+        from posint_scanner.readmodel import build_dashboard
 
         with Database(grouped_client.app.state.db.path) as db:
             group = next(e for e in build_dashboard(db)["entries"] if e["name"] == "dns-net.*")
@@ -806,7 +806,7 @@ class TestRawReports:
 
 class TestWebLinks:
     def test_web_url_detection(self):
-        from posint_scanner.web.views import web_url
+        from posint_scanner.readmodel import web_url
 
         svc = lambda port, banner=None, protocol="tcp": {  # noqa: E731
             "port": port, "banner": banner, "protocol": protocol}
