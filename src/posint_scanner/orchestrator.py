@@ -79,9 +79,15 @@ class ScanControl:
     work and raise ScanCancelled promptly. One instance is shared across a
     run's domain/stage thread pools, so both are thread-safe."""
 
-    def __init__(self, on_progress: Callable[[str, str], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_progress: Callable[[str, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        """`cancel_event` may be a multiprocessing Event, for a scan run in
+        a child process and cancelled from its parent."""
         self.on_progress = on_progress
-        self._cancel = threading.Event()
+        self._cancel = cancel_event if cancel_event is not None else threading.Event()
 
     def progress(self, stage: str, detail: str = "") -> None:
         logger.info("scan stage: %s%s", stage, f" ({detail})" if detail else "")

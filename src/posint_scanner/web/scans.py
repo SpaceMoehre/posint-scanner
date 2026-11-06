@@ -1,34 +1,47 @@
-"""Background scan runner for the web UI.
+"""Background scan jobs for the web UI.
 
 A scan is long-running (discovery + netblock sweep + enrichment + fingerprint
 + CVE lookup can take many minutes), so the HTTP handler can't block on it.
-This runs each scan on its own thread and tracks status in a registry the UI
-polls.
+Each job runs in its own process (ProcessRunner): a scan keeps a hundred
+threads busy parsing, fingerprinting and storing, and in the server's
+process they would hold the GIL against every page request. At most
+`web.max_parallel_scans` (config.yaml) run at once; later jobs wait as
+pending.
 
-Jobs are also stored in the DB (`scan_jobs`), with the work each has finished
-(`scan_checkpoints`, see orchestrator.Checkpoints). A job still marked
-running when the process starts was cut off - the container stopped, the
-process was killed - and is marked "interrupted". Resuming it (automatically
-on startup, or from the UI) runs it again under the same id, skipping what it
-already finished. Cancelled and failed jobs can be resumed the same way.
+The `scan_jobs` table is the one record of a job: the process running it
+writes its status and progress there, and the UI reads them from there.
+Finished work is recorded in `scan_checkpoints` (see
+orchestrator.Checkpoints). A job still marked active when the server starts
+was cut off - the container stopped, the process was killed - and is marked
+"interrupted". Resuming it (automatically on startup, or from the UI) runs
+it again under the same id, skipping what it already finished. Cancelled and
+failed jobs can be resumed the same way.
 
-The worker opens its own Database on its own thread rather than sharing the
-web app's connection: a scan holds the DB busy for minutes, and keeping that
-off the connection the UI reads from means the dashboard stays responsive
-while a scan runs.
+Cancelling sets the job's cancel event, which the scan checks between units
+of work; a scan that hasn't stopped CANCEL_GRACE_SECONDS later is killed
+(its tool sandboxes die with it, and checkpoints keep it resumable).
 """
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
+import logging.handlers
+import atexit
+import multiprocessing
+import multiprocessing.process
+import os
+import signal
 import threading
 import uuid
+from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 
 from posint_scanner import toolrun
-from posint_scanner.config import load_config
+from posint_scanner.config import WebConfig, load_config
 from posint_scanner.db import Database
 from posint_scanner.orchestrator import Checkpoints, ScanControl, run_scan
 from posint_scanner.registry import SOURCE_CLASSES, SourceSelection, build_sources
@@ -38,8 +51,10 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_STATES = ("pending", "running", "cancelling")
 RESUMABLE_STATES = ("interrupted", "cancelled", "failed")
-# How many past jobs the dashboard lists after a restart.
-RECOVERED_JOBS = 50
+# How many past jobs the dashboard lists.
+LISTED_JOBS = 50
+# How long a cancelled scan may take to stop on its own before it's killed.
+CANCEL_GRACE_SECONDS = 30.0
 
 
 def _now() -> str:
@@ -106,14 +121,6 @@ class ScanJob:
     finished_at: str | None = None
     created_at: str = field(default_factory=_now)
     resumes: int = 0
-    # Set when the job starts running; the cancel endpoint calls control.cancel().
-    control: ScanControl | None = None
-
-    def cancel(self) -> None:
-        if self.control is not None:
-            self.control.cancel()
-        if self.status in ("pending", "running"):
-            self.status = "cancelling"
 
     @property
     def resumable(self) -> bool:
@@ -151,150 +158,372 @@ class ScanJob:
         )
 
 
-class ScanManager:
-    """Thread-safe registry of scan jobs. One instance lives on the app."""
+def run_job(db_path: str, config_path: str, job_id: str, control: ScanControl) -> None:
+    """Run the stored job `job_id` to its end, recording its status and
+    progress in `scan_jobs`. Runs in the job's own process (ProcessRunner)."""
+    with Database(db_path) as db:
+        row = db.get_scan_job(job_id)
+        if row is None:
+            logger.error("scan job %s is gone - not running it", job_id)
+            return
+        job = ScanJob.from_row(row)
+        # The first start, kept across resumes: source calls the job made
+        # since then aren't repeated (see orchestrator.Checkpoints).
+        job.started_at = job.started_at or _now()
+        db.update_scan_job(job_id, started_at=job.started_at)
+        # Unless it was cancelled meanwhile - then it shows as cancelling.
+        db.update_scan_job(job_id, only_if_status=("pending",), status="running")
 
-    def __init__(self, db_path: str, config_path: str, resume_interrupted: bool = False) -> None:
+        def on_progress(stage: str, detail: str) -> None:
+            db.update_scan_job(job_id, stage=stage, detail=detail)
+
+        control.on_progress = on_progress
+        error = None
+        try:
+            config = load_config(config_path)
+            toolrun.set_limits(config.sandbox.size_mb, config.sandbox.max_inodes)
+            opts = job.options
+            apply_source_secrets(config, db)  # web-UI API keys, if any
+            sources = build_sources(
+                config,
+                opts.selection(),
+                overrides=(
+                    {"qualys_vmdr": {"authorize_scans": True}} if opts.authorize_scans else None
+                ),
+            )
+            run_scan(
+                db,
+                [job.domain],
+                sources,
+                netblock_sweep=opts.netblock_sweep,
+                verify_ports=opts.verify_ports,
+                tech_fingerprint=opts.fingerprint,
+                vuln_lookup=opts.vuln_lookup,
+                nuclei_scan=opts.nuclei,
+                nuclei_templates_dir=config.nuclei.templates_dir,
+                nikto_scan=opts.nikto,
+                wpscan_scan=opts.wpscan,
+                takeover_scan=opts.takeover,
+                php2shell_scan=opts.php2shell,
+                webscan_config=config.webscan,
+                cloud_scan=opts.cloud_scan,
+                cloud_audit=opts.cloud_audit,
+                cloudscan_config=config.cloudscan,
+                nvd_api_key=config.nvd.api_key,
+                fresh=opts.fresh,
+                control=control,
+                checkpoints=Checkpoints(db, job.id, since=job.started_at),
+            )
+            if not control.cancelled():
+                db.delete_scan_checkpoints(job.id)  # nothing left to resume
+            status = "cancelled" if control.cancelled() else "completed"
+        except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
+            logger.exception("scan job %s for %s failed", job.id, job.domain)
+            status = "failed"
+            error = f"{type(exc).__name__}: {exc}"
+        db.update_scan_job(job_id, status=status, error=error, finished_at=_now())
+
+
+# Called with (job id, exit code) once a runner's job has ended.
+OnExit = Callable[[str, int], None]
+
+
+class ProcessRunner:
+    """Runs each job in a spawned child process (fork is unsafe in a
+    process that already runs threads). The child's log records come back
+    over a queue and go through this process's logging setup, so one
+    process writes the log file.
+
+    Children are started from one long-lived launcher thread: the kernel's
+    parent-death signal (see _child_main) fires when the *thread* that
+    started a child exits, and request-handler threads come and go."""
+
+    def __init__(self, db_path: str, config_path: str, on_exit: OnExit,
+                 target: Callable[..., None] | None = None) -> None:
+        """`target` replaces the child's entry point (_child_main), for tests."""
         self.db_path = db_path
         self.config_path = config_path
-        self._jobs: dict[str, ScanJob] = {}
+        self.on_exit = on_exit
+        self._target = target or _child_main
+        self._ctx = multiprocessing.get_context("spawn")
         self._lock = threading.Lock()
-        # Job bookkeeping only; scans write through their own connection.
+        self._cancel: dict[str, object] = {}  # job id -> its multiprocessing Event
+        self._procs: dict[str, multiprocessing.process.BaseProcess] = {}
+        self._launches: deque[str] = deque()
+        self._wake = threading.Condition(self._lock)
+        self._logs = self._ctx.Queue()
+        self._listener = logging.handlers.QueueListener(self._logs, _Forward())
+        self._listener.start()
+        # At exit multiprocessing terminates the children; their jobs then
+        # stay active, to show as interrupted (and resume) on the next start.
+        # Registered after multiprocessing's own exit hook, so it runs first.
+        self._exiting = False
+        atexit.register(self._at_exit)
+        threading.Thread(target=self._launcher, name="scan-launcher", daemon=True).start()
+
+    def _at_exit(self) -> None:
+        self._exiting = True
+
+    def start(self, job_id: str) -> None:
+        with self._lock:
+            # Registered now, so a cancel before the launch still reaches it.
+            self._cancel[job_id] = self._ctx.Event()
+            self._launches.append(job_id)
+            self._wake.notify()
+
+    def cancel(self, job_id: str) -> None:
+        with self._lock:
+            event = self._cancel.get(job_id)
+            proc = self._procs.get(job_id)
+        if event is None:
+            return
+        event.set()  # type: ignore[attr-defined]
+        if proc is not None:
+            _kill_later(job_id, proc)
+
+    def _launcher(self) -> None:
+        while True:
+            with self._lock:
+                while not self._launches:
+                    self._wake.wait()
+                job_id = self._launches.popleft()
+                event = self._cancel[job_id]
+            proc = self._ctx.Process(
+                target=_child_bootstrap,
+                args=(self._target, self.db_path, self.config_path, job_id, event, self._logs,
+                      logging.getLogger().getEffectiveLevel(), os.getpid()),
+                name=f"scan-{job_id}",
+                daemon=True,
+            )
+            try:
+                proc.start()
+            except Exception:
+                logger.exception("could not start a process for scan job %s", job_id)
+                with self._lock:
+                    self._cancel.pop(job_id, None)
+                self.on_exit(job_id, 1)
+                continue
+            with self._lock:
+                self._procs[job_id] = proc
+            if event.is_set():  # type: ignore[attr-defined]
+                _kill_later(job_id, proc)  # cancelled before it launched
+            threading.Thread(target=self._reap, args=(job_id, proc), daemon=True).start()
+
+    def _reap(self, job_id: str, proc: multiprocessing.process.BaseProcess) -> None:
+        proc.join()
+        with self._lock:
+            self._procs.pop(job_id, None)
+            self._cancel.pop(job_id, None)
+        if not self._exiting:
+            self.on_exit(job_id, proc.exitcode or 0)
+
+
+class ThreadRunner:
+    """Runs each job on a thread of this process. The tests use it: they
+    patch run_scan, which a child process wouldn't see."""
+
+    def __init__(self, db_path: str, config_path: str, on_exit: OnExit) -> None:
+        self.db_path = db_path
+        self.config_path = config_path
+        self.on_exit = on_exit
+        self._lock = threading.Lock()
+        self._cancel: dict[str, threading.Event] = {}
+
+    def start(self, job_id: str) -> None:
+        event = threading.Event()
+        with self._lock:
+            self._cancel[job_id] = event
+
+        def target() -> None:
+            exitcode = 1
+            try:
+                run_job(self.db_path, self.config_path, job_id, ScanControl(cancel_event=event))
+                exitcode = 0
+            finally:
+                with self._lock:
+                    self._cancel.pop(job_id, None)
+                self.on_exit(job_id, exitcode)
+
+        threading.Thread(target=target, name=f"scan-{job_id}", daemon=True).start()
+
+    def cancel(self, job_id: str) -> None:
+        with self._lock:
+            event = self._cancel.get(job_id)
+        if event is not None:
+            event.set()
+
+
+# The runner ScanManager uses unless given one (the tests swap it).
+RUNNER: Callable[[str, str, OnExit], ProcessRunner | ThreadRunner] = ProcessRunner
+
+
+class _Forward(logging.Handler):
+    """Hands a child's log record to this process's logger of the same name."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        logging.getLogger(record.name).handle(record)
+
+
+def _kill_later(job_id: str, proc: multiprocessing.process.BaseProcess) -> None:
+    timer = threading.Timer(CANCEL_GRACE_SECONDS, _kill, args=(job_id, proc))
+    timer.daemon = True
+    timer.start()
+
+
+def _kill(job_id: str, proc: multiprocessing.process.BaseProcess) -> None:
+    if proc.is_alive():
+        logger.warning("scan job %s did not stop within %ds of its cancel - killing it",
+                       job_id, CANCEL_GRACE_SECONDS)
+        proc.kill()
+
+
+PR_SET_PDEATHSIG = 1
+
+
+def _child_bootstrap(target: Callable[..., None], db_path: str, config_path: str,
+                     job_id: str, cancel_event, log_queue, log_level: int,
+                     parent_pid: int) -> None:
+    """A scan process's entry point: set the process up, then run `target`."""
+    # Die with the server, as a thread would: a scan outliving it would be
+    # marked interrupted and resumed next to itself. Ctrl+C is the server's
+    # to handle - the scan ends with it.
+    try:
+        ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, int(signal.SIGKILL))
+    except (OSError, AttributeError):
+        pass  # not Linux: the parent's exit still terminates daemon children
+    if os.getppid() != parent_pid:
+        os._exit(1)  # the server is already gone
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    root = logging.getLogger()
+    root.handlers[:] = [logging.handlers.QueueHandler(log_queue)]
+    root.setLevel(log_level)
+    target(db_path, config_path, job_id, cancel_event)
+
+
+def _child_main(db_path: str, config_path: str, job_id: str, cancel_event) -> None:
+    run_job(db_path, config_path, job_id, ScanControl(cancel_event=cancel_event))
+
+
+class ScanManager:
+    """Starts, queues, cancels and lists the web UI's scan jobs. One
+    instance lives on the app."""
+
+    def __init__(
+        self,
+        db_path: str,
+        config_path: str,
+        resume_interrupted: bool = False,
+        runner: Callable[[str, str, OnExit], ProcessRunner | ThreadRunner] | None = None,
+    ) -> None:
+        self.db_path = db_path
+        self.config_path = config_path
         self._db = Database(db_path)
         self._db.init_schema()
+        self._lock = threading.Lock()
+        self._queue: deque[str] = deque()  # pending jobs, oldest first
+        self._running: set[str] = set()
+        self._runner = (runner or RUNNER)(db_path, config_path, self._exited)
         self._recover(resume_interrupted)
 
-    def _save(self, job: ScanJob, *names: str) -> None:
-        try:
-            self._db.update_scan_job(job.id, **{name: getattr(job, name) for name in names})
-        except Exception:
-            logger.exception("failed to store scan job %s - continuing", job.id)
-
     def _recover(self, resume_interrupted: bool) -> None:
-        """Load past jobs; any still marked active was cut off by the process
-        ending - mark it interrupted and, if asked, resume it."""
-        interrupted = []
-        for row in self._db.list_scan_jobs(RECOVERED_JOBS):
-            job = ScanJob.from_row(row)
-            if job.status in ACTIVE_STATES:
-                job.status = "interrupted"
-                self._save(job, "status")
-                interrupted.append(job)
-                logger.warning("scan job %s for %s was interrupted (stage: %s)",
-                               job.id, job.domain, job.stage or "-")
-            self._jobs[job.id] = job
-        if resume_interrupted:
-            for job in interrupted:
-                logger.info("resuming interrupted scan job %s for %s", job.id, job.domain)
-                self.resume(job.id)
+        """A job still marked active was cut off by the last server ending -
+        mark it interrupted and, if asked, resume it."""
+        marks = ", ".join("?" * len(ACTIVE_STATES))
+        for row in self._db.query(
+            f"SELECT * FROM scan_jobs WHERE status IN ({marks}) ORDER BY created_at",
+            ACTIVE_STATES,
+        ):
+            self._db.update_scan_job(row["id"], status="interrupted")
+            logger.warning("scan job %s for %s was interrupted (stage: %s)",
+                           row["id"], row["domain"], row["stage"] or "-")
+            if resume_interrupted:
+                logger.info("resuming interrupted scan job %s for %s", row["id"], row["domain"])
+                self.resume(row["id"])
+
+    def _max_parallel(self) -> int:
+        try:
+            return load_config(self.config_path).web.max_parallel_scans
+        except Exception:  # noqa: BLE001 - a broken config fails the job itself, visibly
+            return WebConfig().max_parallel_scans
+
+    def _dispatch(self) -> None:
+        limit = self._max_parallel()
+        with self._lock:
+            while self._queue and len(self._running) < limit:
+                job_id = self._queue.popleft()
+                self._running.add(job_id)
+                self._runner.start(job_id)
+
+    def _exited(self, job_id: str, exitcode: int) -> None:
+        """A job's runner ended. A process that died without recording an
+        end (killed after a cancel, crashed) is marked here."""
+        try:
+            if exitcode:
+                how = f"signal {-exitcode}" if exitcode < 0 else f"code {exitcode}"
+                if not self._db.update_scan_job(
+                    job_id, only_if_status=("cancelling",), status="cancelled", finished_at=_now()
+                ):
+                    self._db.update_scan_job(
+                        job_id, only_if_status=ACTIVE_STATES, status="failed",
+                        error=f"the scan process exited with {how}", finished_at=_now(),
+                    )
+        except Exception:
+            logger.exception("could not record the end of scan job %s", job_id)
+        finally:
+            with self._lock:
+                self._running.discard(job_id)
+            self._dispatch()
 
     def start(self, domain: str, options: ScanOptions) -> ScanJob:
         job = ScanJob(id=uuid.uuid4().hex[:12], domain=domain, options=options)
-        self._db.create_scan_job(
-            job.id, job.domain, options.to_json(), job.status, job.created_at
-        )
+        self._db.create_scan_job(job.id, job.domain, options.to_json(), job.status, job.created_at)
         with self._lock:
-            self._jobs[job.id] = job
-        threading.Thread(target=self._run, args=(job,), daemon=True).start()
-        return job
+            self._queue.append(job.id)
+        self._dispatch()
+        return self.get(job.id) or job
 
     def resume(self, job_id: str) -> ScanJob | None:
         """Run an interrupted/cancelled/failed job again, continuing where it
         stopped. None if there's no such job or it can't be resumed now."""
+        job = self.get(job_id)
         with self._lock:
-            job = self._jobs.get(job_id)
-            if job is None or not job.resumable:
-                return None
-            job.status = "pending"
-            job.error = None
-            job.finished_at = None
-            job.control = None
-            job.resumes += 1
-        self._save(job, "status", "error", "finished_at", "resumes")
-        threading.Thread(target=self._run, args=(job,), daemon=True).start()
-        return job
+            # Its last run may have recorded its end but not exited yet.
+            still_running = job_id in self._running or job_id in self._queue
+        if job is None or still_running or not self._db.update_scan_job(
+            job_id, only_if_status=RESUMABLE_STATES, status="pending", error=None,
+            finished_at=None, resumes=job.resumes + 1,
+        ):
+            return None
+        with self._lock:
+            self._queue.append(job_id)
+        self._dispatch()
+        return self.get(job_id)
 
     def get(self, job_id: str) -> ScanJob | None:
-        with self._lock:
-            return self._jobs.get(job_id)
+        row = self._db.get_scan_job(job_id)
+        return ScanJob.from_row(row) if row is not None else None
 
     def cancel(self, job_id: str) -> ScanJob | None:
-        job = self.get(job_id)
-        if job is not None:
-            job.cancel()
-            self._save(job, "status")
-        return job
+        if self.get(job_id) is None:
+            return None
+        with self._lock:
+            queued = job_id in self._queue
+            if queued:
+                self._queue.remove(job_id)
+        if queued:
+            self._db.update_scan_job(job_id, only_if_status=("pending",),
+                                     status="cancelled", finished_at=_now())
+        elif self._db.update_scan_job(job_id, only_if_status=("pending", "running"),
+                                      status="cancelling"):
+            self._runner.cancel(job_id)
+        return self.get(job_id)
 
     def busy(self) -> bool:
-        """Whether any scan is still running (deleting data under a running
-        scan would have it write back half a domain)."""
-        with self._lock:
-            return any(j.status in ACTIVE_STATES for j in self._jobs.values())
+        """Whether any scan is still running or waiting (deleting data under
+        a running scan would have it write back half a domain)."""
+        marks = ", ".join("?" * len(ACTIVE_STATES))
+        return bool(self._db.query(
+            f"SELECT 1 FROM scan_jobs WHERE status IN ({marks}) LIMIT 1", ACTIVE_STATES))
 
     def list(self) -> list[ScanJob]:
-        with self._lock:
-            return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
-
-    def _run(self, job: ScanJob) -> None:
-        job.status = "running"
-        # The first start, kept across resumes: source calls the job made
-        # since then aren't repeated (see orchestrator.Checkpoints).
-        job.started_at = job.started_at or _now()
-        self._save(job, "status", "started_at")
-
-        def on_progress(stage: str, detail: str) -> None:
-            job.stage = stage
-            job.detail = detail
-            self._save(job, "stage", "detail")
-
-        job.control = ScanControl(on_progress=on_progress)
-        try:
-            config = load_config(self.config_path)
-            toolrun.set_limits(config.sandbox.size_mb, config.sandbox.max_inodes)
-            opts = job.options
-            # The worker's own connection (see module docstring). check_same_thread
-            # is already off in Database, but a fresh one keeps the scan's long
-            # write lock off the connection the UI reads from.
-            with Database(self.db_path) as db:
-                db.init_schema()
-                apply_source_secrets(config, db)  # web-UI API keys, if any
-                sources = build_sources(
-                    config,
-                    opts.selection(),
-                    overrides=(
-                        {"qualys_vmdr": {"authorize_scans": True}} if opts.authorize_scans else None
-                    ),
-                )
-                run_scan(
-                    db,
-                    [job.domain],
-                    sources,
-                    netblock_sweep=opts.netblock_sweep,
-                    verify_ports=opts.verify_ports,
-                    tech_fingerprint=opts.fingerprint,
-                    vuln_lookup=opts.vuln_lookup,
-                    nuclei_scan=opts.nuclei,
-                    nuclei_templates_dir=config.nuclei.templates_dir,
-                    nikto_scan=opts.nikto,
-                    wpscan_scan=opts.wpscan,
-                    takeover_scan=opts.takeover,
-                    php2shell_scan=opts.php2shell,
-                    webscan_config=config.webscan,
-                    cloud_scan=opts.cloud_scan,
-                    cloud_audit=opts.cloud_audit,
-                    cloudscan_config=config.cloudscan,
-                    nvd_api_key=config.nvd.api_key,
-                    fresh=opts.fresh,
-                    control=job.control,
-                    checkpoints=Checkpoints(db, job.id, since=job.started_at),
-                )
-                if not job.control.cancelled():
-                    db.delete_scan_checkpoints(job.id)  # nothing left to resume
-            job.status = "cancelled" if job.control.cancelled() else "completed"
-        except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
-            logger.exception("scan job %s for %s failed", job.id, job.domain)
-            job.status = "failed"
-            job.error = f"{type(exc).__name__}: {exc}"
-        finally:
-            job.finished_at = _now()
-            self._save(job, "status", "error", "finished_at")
+        return [ScanJob.from_row(row) for row in self._db.list_scan_jobs(LISTED_JOBS)]

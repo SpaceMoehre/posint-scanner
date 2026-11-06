@@ -20,6 +20,8 @@ def seed(db: Database, domains: int, ips_per_domain: int, rescans: int = 1) -> N
         apex = db.upsert_hostname(domain_id, f"example{d}.com")
         db.upsert_resolution(apex, shared)
         db.insert_result("email_auth", "domain", domain_id, {
+            "spoofable": True, "spf": {"found": False}, "dmarc": {"found": False},
+            "dkim": {"selectors_present": []}, "caa": {"found": False, "records": []},
             "findings": [{"severity": "high", "title": "No DMARC record", "detail": ""}]})
         db.upsert_code_exposure(
             domain_id, kind="secret", target=f"example{d}.com", repo="acme/app", path=".env",

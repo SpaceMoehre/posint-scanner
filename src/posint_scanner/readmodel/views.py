@@ -91,10 +91,15 @@ def web_url(address: str, service: dict, webtech_urls: dict[int, str]) -> str | 
     return f"{scheme}://{host}/" if port == default else f"{scheme}://{host}:{port}/"
 
 
-def _hosts(db: Database, scope: Scope) -> list[dict]:
+# The IP result sources ip_findings reads (shodan: its SNMP banners).
+IP_FINDING_SOURCES = ("nvd", "nuclei", *_WEB_TOOLS, "webtech", "leakix",
+                      "container_exposure", "snmp", "shodan")
+
+
+def hosts_with_vulns(db: Database, scope: Scope, sources=("nvd",)) -> list[dict]:
     """The IPs in `scope` as the overview groups them: hostnames, domains,
-    services and flattened CVEs (only `nvd` results are read)."""
-    hosts = queries.hosts(db, scope, ["nvd"])
+    services, `results` of `sources` and their flattened CVEs (`vulns`)."""
+    hosts = queries.hosts(db, scope, sources)
     for host in hosts:
         host["vulns"] = _flatten_nvd_vulns([(r["source"], r["data"]) for r in host["results"]])
     return hosts
@@ -106,7 +111,7 @@ def build_overview(db: Database, domain: str | None = None) -> dict:
     narrows everything to IPs attributed to that apex domain."""
     names = [row["name"] for row in db.list_domains()]
     scope = Scope.domains(queries.domain_ids(db, [domain]).values()) if domain else Scope()
-    hosts = _hosts(db, scope)
+    hosts = hosts_with_vulns(db, scope)
     exposures, vuln_rows, criticals = _collect(hosts)
     unattributed = db.query(
         "SELECT COUNT(*) AS n FROM ip_addresses WHERE id NOT IN (SELECT ip_id FROM resolutions)"
@@ -179,7 +184,7 @@ def build_dashboard(db: Database) -> dict:
     a single domain each. User groups come first; the other domains are
     grouped with their TLD siblings (example.com + example.de) when they
     have any."""
-    hosts = _hosts(db, Scope())
+    hosts = hosts_with_vulns(db, Scope())
     by_domain: dict[str, list[dict]] = {}
     for host in hosts:
         for name in host["domains"]:

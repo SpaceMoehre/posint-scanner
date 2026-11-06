@@ -149,6 +149,11 @@ list, and can be stopped with a **Cancel** button - cancellation is
 cooperative (it stops at the next stage boundary) and keeps whatever was
 gathered so far.
 
+Each scan runs in its own process, so the pages stay responsive while scans
+work. At most `web.max_parallel_scans` (config, default 2) run at once;
+later ones wait as **pending**. A scan that hasn't stopped 30 s after
+**Cancel** is killed (it stays resumable).
+
 ### Resuming interrupted scans
 
 Scan jobs are stored in the DB, together with the work each has finished:
@@ -604,7 +609,8 @@ run. `--fresh` (or the web UI's *fresh* box) ignores TTLs for one run.
 
 ## Configuration
 
-`sandbox:` caps each tool sandbox (see **Tool sandbox**). Every source lives under one `sources:` map; each field can also be set via
+`sandbox:` caps each tool sandbox (see **Tool sandbox**); `web:` limits the
+web UI's parallel scans (see **Web UI**). Every source lives under one `sources:` map; each field can also be set via
 `OSINT_<SOURCE>_<FIELD>` (e.g. `OSINT_SHODAN_API_KEY`,
 `OSINT_SHODAN_WEB_ENABLED=true`). Old top-level sections (`shodan:`,
 `censys:`, `qualys_vmdr:`) keep working. See `config.example.yaml`.

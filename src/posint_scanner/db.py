@@ -285,6 +285,10 @@ class Database:
             # Cap what a checkpointed WAL may keep on disk; without it the file
             # stays at its high-water mark (which a long scan can push far).
             self.conn.execute(f"PRAGMA journal_size_limit = {self.WAL_SIZE_LIMIT_BYTES}")
+            # In WAL mode NORMAL is still crash-safe (a power cut may only lose
+            # the last commits) and spares the fsync on each of a scan's many
+            # small commits.
+            self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.execute(f"PRAGMA busy_timeout = {self.BUSY_TIMEOUT_MS}")
 
     def __enter__(self) -> Database:
@@ -1013,18 +1017,25 @@ class Database:
         self.conn.commit()
 
     @_locked
-    def update_scan_job(self, job_id: str, **fields: Any) -> None:
-        """Write just the given fields of a scan job."""
+    def update_scan_job(
+        self, job_id: str, only_if_status: tuple[str, ...] | None = None, **fields: Any
+    ) -> bool:
+        """Write just the given fields of a scan job - with `only_if_status`,
+        only while its status is one of those (the job runs in another
+        process, which may have finished meanwhile). Whether it was written."""
         unknown = set(fields) - set(self._SCAN_JOB_FIELDS)
         if unknown:
             raise ValueError(f"unknown scan job field(s): {sorted(unknown)}")
         if not fields:
-            return
-        self.conn.execute(
-            f"UPDATE scan_jobs SET {', '.join(f'{c} = ?' for c in fields)} WHERE id = ?",
-            (*fields.values(), job_id),
-        )
+            return False
+        sql = f"UPDATE scan_jobs SET {', '.join(f'{c} = ?' for c in fields)} WHERE id = ?"
+        params: list[Any] = [*fields.values(), job_id]
+        if only_if_status is not None:
+            sql += f" AND status IN ({', '.join('?' * len(only_if_status))})"
+            params += only_if_status
+        written = self.conn.execute(sql, params).rowcount > 0
         self.conn.commit()
+        return written
 
     @_locked
     def get_scan_job(self, job_id: str) -> sqlite3.Row | None:
@@ -1084,3 +1095,19 @@ class Database:
         else:
             self.conn.execute("DELETE FROM settings WHERE key = ?", (key,))
         self.conn.commit()
+
+
+class PerThreadDatabase:
+    """One Database per calling thread, opened on its first use. The web
+    server's request threads each read through their own connection rather
+    than queueing for one - a Database serializes its calls."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = str(path)
+        self._local = threading.local()
+
+    def get(self) -> Database:
+        db = getattr(self._local, "db", None)
+        if db is None:
+            db = self._local.db = Database(self.path)
+        return db

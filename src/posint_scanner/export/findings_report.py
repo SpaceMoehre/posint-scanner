@@ -20,9 +20,9 @@ from datetime import datetime, timezone
 
 from posint_scanner.cloudscan import SEVERITIES, severity_rank
 from posint_scanner.db import Database
-from posint_scanner.export.obsidian_export import _flatten_nvd_vulns
 from posint_scanner.export.overview import _collect, severity_of
 from posint_scanner.readmodel import domain_findings, ip_findings, queries
+from posint_scanner.readmodel.views import IP_FINDING_SOURCES, hosts_with_vulns
 from posint_scanner.readmodel.queries import Scope
 
 # Locations listed per merged finding before "+N more".
@@ -142,19 +142,11 @@ def collect_findings(db: Database, domains: Collection[str] | None = None) -> di
     """Findings (merged), sensitive-service exposures and scope counts for
     `domains` (None: everything, IPs no domain claims included)."""
     ids = queries.domain_ids(db, domains)
-    hosts = queries.hosts(db, Scope() if domains is None else Scope.domains(ids.values()))
-    for host in hosts:
-        host["vulns"] = _flatten_nvd_vulns([(r["source"], r["data"]) for r in host["results"]])
+    scope = Scope() if domains is None else Scope.domains(ids.values())
+    hosts = hosts_with_vulns(db, scope, IP_FINDING_SOURCES)
     results = queries.domain_results(db, ids.values())
     takeovers = queries.hostname_results_by_domain(db, ids.values(), ["takeover"])
-    secrets: dict[int, list] = {}
-    if ids:
-        for row in db.query(
-            "SELECT * FROM code_exposures WHERE kind = 'secret' "
-            f"AND domain_id IN ({', '.join('?' * len(ids))}) ORDER BY repo, path",
-            tuple(ids.values()),
-        ):
-            secrets.setdefault(row["domain_id"], []).append(row)
+    secrets = queries.secret_exposures(db, ids.values())
     findings = []
     for name, domain_id in ids.items():
         d = domain_findings(results.get(domain_id, []), takeovers.get(domain_id, []))

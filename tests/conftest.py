@@ -21,6 +21,15 @@ def isolated_tool_dirs(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def scans_on_threads(monkeypatch):
+    """Web scan jobs run on threads here, where the tests' patches of
+    run_scan reach them (test_scan_processes.py runs real processes)."""
+    from posint_scanner.web import scans
+
+    monkeypatch.setattr(scans, "RUNNER", scans.ThreadRunner)
+
+
+@pytest.fixture(autouse=True)
 def restore_root_logging():
     """CLI commands run setup_logging(), whose root handler writes to the
     stderr CliRunner swaps in and closes after the command - drop it, or a

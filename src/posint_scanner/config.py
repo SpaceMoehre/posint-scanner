@@ -112,6 +112,13 @@ class SandboxConfig(BaseModel):
     max_inodes: int = 200_000
 
 
+class WebConfig(BaseModel):
+    """The web UI's scan jobs. Each runs in its own process (see
+    web/scans.py); jobs started past this many wait as pending."""
+
+    max_parallel_scans: int = Field(default=2, ge=1)
+
+
 class CategoryDefaults(BaseModel):
     """Whether a source of each category runs when nothing more specific
     (config `enabled:`, CLI flag) says otherwise."""
@@ -129,6 +136,7 @@ class Config(BaseModel):
     webscan: WebScanConfig = WebScanConfig()
     cloudscan: CloudScanConfig = CloudScanConfig()
     sandbox: SandboxConfig = SandboxConfig()
+    web: WebConfig = WebConfig()
 
     def source_settings(self, name: str, model: type[S]) -> S:
         """Resolve one source's settings: its config section, then any
@@ -144,7 +152,7 @@ class Config(BaseModel):
 
 
 _RESERVED_TOP_LEVEL = {
-    "defaults", "sources", "nvd", "nuclei", "webscan", "cloudscan", "sandbox",
+    "defaults", "sources", "nvd", "nuclei", "webscan", "cloudscan", "sandbox", "web",
 }
 
 
@@ -165,7 +173,8 @@ def load_config(path: str | Path | None) -> Config:
          "nvd": raw.get("nvd") or {}, "nuclei": raw.get("nuclei") or {},
          "webscan": raw.get("webscan") or {},
          "cloudscan": raw.get("cloudscan") or {},
-         "sandbox": raw.get("sandbox") or {}}
+         "sandbox": raw.get("sandbox") or {},
+         "web": raw.get("web") or {}}
     )
     nvd_key = os.environ.get("OSINT_NVD_API_KEY")
     if nvd_key:

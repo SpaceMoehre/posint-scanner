@@ -172,3 +172,8 @@ cloudscan:
   # max_clone_mb: 500         # a clone growing past this on disk is killed and skipped
   # max_repos: 25
   # max_images: 25
+
+# Web UI scan jobs: each runs in its own process; jobs started past this many
+# wait as pending until one ends.
+# web:
+#   max_parallel_scans: 2

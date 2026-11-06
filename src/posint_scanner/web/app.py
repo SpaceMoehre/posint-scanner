@@ -1,10 +1,10 @@
 """FastAPI application: dashboard to launch scans + browsable HTML reports.
 
 `create_app` is a factory (not a module-level app) so tests can point it at a
-temp DB and the CLI can wire in real paths. Read routes are served from one
-shared Database (SQLite with an RLock, safe across request threads); scans
-run on their own threads via ScanManager and write the same DB file, which
-the read connection then sees on its next query.
+temp DB and the CLI can wire in real paths. Each request thread reads
+through its own connection (PerThreadDatabase); scans run in their own
+processes via ScanManager and write the same DB file, which a page then
+sees on its next query.
 
 Bind to localhost by default (see cli.serve). This UI launches active,
 target-touching scans, so it is meant for the operator running it, not for
@@ -34,7 +34,7 @@ from starlette.background import BackgroundTask
 
 from posint_scanner import proxy, toolrun
 from posint_scanner.config import load_config
-from posint_scanner.db import Database
+from posint_scanner.db import PerThreadDatabase
 from posint_scanner.export.findings_report import render_report
 from posint_scanner.export.zip_export import write_zip
 from posint_scanner.registry import describe_sources
@@ -74,11 +74,12 @@ def create_app(
         db_path=db_path, config_path=config_path, resume_interrupted=resume_interrupted
     )
 
-    # One shared read connection; ensure the schema exists so pages render
-    # (empty) even before the first scan has written anything.
-    db = Database(db_path)
-    db.init_schema()
-    app.state.db = db
+    # Ensure the schema exists so pages render (empty) even before the
+    # first scan has written anything.
+    databases = PerThreadDatabase(db_path)
+    databases.get().init_schema()
+    app.state.db = databases
+    db = databases.get
     app.state.manager = manager
 
     def page(name: str, request: Request, status_code: int = 200, **ctx) -> HTMLResponse:
@@ -90,11 +91,11 @@ def create_app(
         # Fold in web-UI keys so registry sources show their true configured
         # state here (NVD/WPScan aren't registry sources - their status shows
         # on the Settings page instead).
-        apply_source_secrets(config, db)
+        apply_source_secrets(config, db())
         return page(
             "dashboard.html",
             request,
-            data=views.build_dashboard(db),
+            data=views.build_dashboard(db()),
             jobs=[j.as_dict() for j in manager.list()],
             sources=describe_sources(config),
             active_default=config.defaults.active,
@@ -187,7 +188,7 @@ def create_app(
         fd, path = tempfile.mkstemp(suffix=".zip")
         os.close(fd)
         try:
-            write_zip(db, path, domains=domain or None)
+            write_zip(db(), path, domains=domain or None)
         except Exception:
             os.unlink(path)
             raise
@@ -205,7 +206,7 @@ def create_app(
         /export.zip."""
         now = datetime.now(timezone.utc)
         return Response(
-            render_report(db, domains=domain or None, now=now),
+            render_report(db(), domains=domain or None, now=now),
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": (
                 f'attachment; filename="posint-findings-{now.strftime("%Y%m%d-%H%M%S")}.md"'
@@ -214,7 +215,7 @@ def create_app(
 
     @app.post("/domains/{name}/delete", response_model=None)
     def delete_domain(request: Request, name: str):
-        row = db.get_domain_by_name(name)
+        row = db().get_domain_by_name(name)
         if row is None:
             return page("not_found.html", request, status_code=404, what=f"domain {name}")
         if manager.busy():
@@ -225,7 +226,7 @@ def create_app(
                 heading="Scan running",
                 message=f"Not deleting {name} while a scan is running - try again once it finishes.",
             )
-        db.delete_domain(row["id"])
+        db().delete_domain(row["id"])
         return RedirectResponse("/", status_code=303)
 
     @app.post("/domain-groups")
@@ -234,18 +235,18 @@ def create_app(
     ) -> RedirectResponse:
         group = " ".join(group.split())[:MAX_GROUP_NAME_LENGTH]
         if group and domain:
-            db.set_domain_group(group, domain)
+            db().set_domain_group(group, domain)
         return RedirectResponse("/", status_code=303)
 
     @app.post("/domain-groups/remove")
     def ungroup_domains(domain: list[str] = Form([])) -> RedirectResponse:
-        db.ungroup_domains(domain)
+        db().ungroup_domains(domain)
         return RedirectResponse("/", status_code=303)
 
     @app.get("/reports/{output_id}", response_model=None)
     def download_report(request: Request, output_id: int):
         """A stored tool report, decompressed on the fly - nothing hits disk."""
-        row = db.get_tool_output(output_id)
+        row = db().get_tool_output(output_id)
         if row is None:
             return page("not_found.html", request, status_code=404, what=f"report {output_id}")
         name = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{row['tool']}-{row['target']}").strip("_")
@@ -260,11 +261,11 @@ def create_app(
     def settings_page(request: Request, form: dict, status_code: int = 200, **ctx) -> HTMLResponse:
         return page("settings.html", request, status_code=status_code, form=form,
                      default_dns=proxy.DEFAULT_DNS_SERVER,
-                     source_keys=source_key_groups(db), **ctx)
+                     source_keys=source_key_groups(db()), **ctx)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_view(request: Request) -> HTMLResponse:
-        return settings_page(request, load_settings(db).model_dump())
+        return settings_page(request, load_settings(db()).model_dump())
 
     @app.post("/settings", response_class=HTMLResponse)
     def settings_save(
@@ -280,7 +281,7 @@ def create_app(
         except ValidationError as exc:
             error = "; ".join(e["msg"].removeprefix("Value error, ") for e in exc.errors())
             return settings_page(request, form, status_code=400, error=error)
-        save_settings(db, settings)
+        save_settings(db(), settings)
         warning = None
         if settings.proxy_url:
             try:
@@ -308,7 +309,7 @@ def create_app(
 
     @app.post("/settings/keys", response_class=HTMLResponse)
     async def settings_keys_save(request: Request) -> HTMLResponse:
-        proxy_form = load_settings(db).model_dump()
+        proxy_form = load_settings(db()).model_dump()
         if manager.busy():
             # A running scan has already built its sources from the old keys.
             return settings_page(request, proxy_form, status_code=409,
@@ -324,16 +325,16 @@ def create_app(
                 values.setdefault(source, {})[field] = None
             elif (raw := form.get(name)) is not None and str(raw).strip():
                 values.setdefault(source, {})[field] = str(raw)
-        save_source_secrets(db, values)
+        save_source_secrets(db(), values)
         return settings_page(request, proxy_form, keys_saved=True)
 
     @app.get("/overview", response_class=HTMLResponse)
     def overview(request: Request, domain: str | None = None) -> HTMLResponse:
-        return page("overview.html", request, ov=views.build_overview(db, domain or None))
+        return page("overview.html", request, ov=views.build_overview(db(), domain or None))
 
     @app.get("/domains/{name}", response_class=HTMLResponse)
     def domain(request: Request, name: str) -> HTMLResponse:
-        data = views.build_domain(db, name)
+        data = views.build_domain(db(), name)
         if data is None:
             return page("not_found.html", request, status_code=404, what=f"domain {name}")
         return page(
@@ -345,7 +346,7 @@ def create_app(
 
     @app.get("/hosts/{name}", response_class=HTMLResponse)
     def host(request: Request, name: str) -> HTMLResponse:
-        data = views.build_host(db, name)
+        data = views.build_host(db(), name)
         if data is None:
             return page("not_found.html", request, status_code=404, what=f"host {name}")
         # Hostname detail lives on the IP page; only unresolved names get their own.
@@ -355,7 +356,7 @@ def create_app(
 
     @app.get("/ips/{address}", response_class=HTMLResponse)
     def ip(request: Request, address: str) -> HTMLResponse:
-        data = views.build_ip(db, address)
+        data = views.build_ip(db(), address)
         if data is None:
             return page("not_found.html", request, status_code=404, what=f"IP {address}")
         return page("ip.html", request, ip=data)

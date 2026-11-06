@@ -186,6 +186,18 @@ def domain_ids(db: Database, names: Collection[str] | None = None) -> dict[str, 
     return {r["name"]: r["id"] for r in rows}
 
 
+def secret_exposures(db: Database, domain_ids: Collection[int]) -> dict[int, list[dict]]:
+    """domain id -> its leaked secrets found in public code."""
+    if not domain_ids:
+        return {}
+    rows = db.query(
+        "SELECT * FROM code_exposures WHERE kind = 'secret' "
+        f"AND domain_id IN ({', '.join('?' * len(domain_ids))}) ORDER BY repo, path",
+        tuple(domain_ids),
+    )
+    return _group(rows, "domain_id")
+
+
 def count_by_domain(db: Database, table: str, extra: str = "") -> dict[int, int]:
     """domain id -> rows of `table` (hostnames, code_exposures, ...) it owns."""
     rows = db.query(
