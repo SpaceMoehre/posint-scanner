@@ -1,12 +1,9 @@
 {% extends "base.html" %}
+{% from "_macros.html" import scan_options, scan_options_script %}
 {% block head %}
 <style>
   #domains td:nth-child(2), #domains td:nth-child(10) { white-space: nowrap; }
   .scan-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  details.opts { margin-top: 12px; }
-  details.opts > summary { cursor: pointer; color: var(--muted); font-size: 14px; width: fit-content; }
-  details.opts > summary:hover { color: var(--fg); }
-  details.opts[open] > summary { margin-bottom: 8px; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
   .actions .sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
   .live { display: flex; flex-direction: column; gap: 6px; }
@@ -31,81 +28,11 @@
       <input type="text" name="domain" placeholder="example.com" aria-label="Domain to scan" required autofocus>
       <button type="submit">Scan</button>
     </div>
-    <input type="hidden" name="sources_form" value="1">
-    <details class="opts">
-    <summary>Sources &amp; stages · <span id="opts-count"></span></summary>
-    <p><button type="button" id="select-all-opts" class="secondary">Select all options</button></p>
-    {% for category in ["passive", "scrape", "active"] %}
-    <div class="source-group">
-      <span class="muted">{{ category }}:</span>
-      {% for s in sources if s.category == category %}
-      <label title="{% if not s.configured %}not configured (no API key) - will be skipped{% elif s.fallback_for %}keyless stand-in for {{ s.fallback_for }}{% endif %}"><input type="checkbox" name="source" value="{{ s.name }}"{% if s.enabled %} checked{% endif %}> {{ s.name }}{% if not s.configured %} <span class="muted">(no key)</span>{% endif %}</label>
-      {% endfor %}
-    </div>
-    {% endfor %}
-    <div class="source-group">
-      <span class="muted">stages:</span>
-      <label title="TCP-connect every port Shodan, Censys etc. reported and drop the ones that don't accept the connection."><input type="checkbox" name="verify_ports"{% if active_default %} checked{% endif %}> verify reported ports</label>
-      <label><input type="checkbox" name="fingerprint"{% if active_default %} checked{% endif %}> tech fingerprint</label>
-      <label><input type="checkbox" name="netblock_sweep" checked> netblock sweep</label>
-      <label><input type="checkbox" name="vuln_lookup" checked> CVE lookup</label>
-      <label title="Active, intrusive template scan of discovered web services. Needs the nuclei binary. Only for hosts you're authorized to test."><input type="checkbox" name="nuclei"> nuclei scan (active)</label>
-      <label title="Active: the Nikto web-server scanner against every resolved web service. Needs the nikto binary. Only for hosts you're authorized to test."><input type="checkbox" name="nikto"> nikto scan (active)</label>
-      <label title="Active: WPScan against every resolved web service (a fast no-op on non-WordPress sites). Needs the wpscan binary; set webscan.wpscan_api_token for CVE data."><input type="checkbox" name="wpscan"> wpscan (active)</label>
-      <label title="Check every discovered hostname for a dangling, claimable service (subdomain takeover). Needs the takeover binary."><input type="checkbox" name="takeover"> subdomain takeover</label>
-      <label title="Read the PHP version each web service discloses in its headers (openai/php2shell-checker, one HEAD request each), flag php2shell-vulnerable versions and look up the version's CVEs. Needs the phpcheck wrapper."><input type="checkbox" name="php2shell"{% if active_default %} checked{% endif %}> php2shell check</label>
-      <label title="Credential-free: Checkov + Trivy on the public GitHub repos and container images found for this domain. Needs the trivy/checkov binaries."><input type="checkbox" name="cloud_scan"> cloud artifact scan (trivy/checkov)</label>
-      <label title="Authenticated: Prowler + ScoutSuite against the configured cloud providers, using your environment credentials. Only for accounts you're authorized to audit. Needs the prowler/scout binaries."><input type="checkbox" name="cloud_audit"> cloud account audit (prowler/scoutsuite)</label>
-      <label><input type="checkbox" name="fresh"> fresh (ignore source TTLs)</label>
-      <label><input type="checkbox" name="authorize_scans"> authorize active Qualys scans</label>
-    </div>
-    </details>
+    {{ scan_options(sources, form) }}
     <p class="note">Active stages connect directly to the target. Only scan infrastructure you are authorized to test. Re-scanning a known domain automatically revalidates it and prunes results that are no longer valid.</p>
   </form>
 </div>
-<script>
-// Remember the source/stage checkboxes across scans (per browser). Boxes not
-// saved yet (e.g. a newly added source) keep their config default.
-// The active/intrusive toggles (authorize_scans, nuclei, nikto, ...) are never
-// remembered: each must be a deliberate per-scan choice.
-(function () {
-  const KEY = "posint.scanForm";
-  const NEVER_REMEMBER = ["authorize_scans", "nuclei", "nikto", "wpscan", "takeover", "cloud_scan", "cloud_audit"];
-  const form = document.querySelector("form.scan");
-  const boxes = [...form.querySelectorAll('input[type=checkbox]')]
-    .filter(b => !NEVER_REMEMBER.includes(b.name));
-  const id = b => b.name + ":" + b.value;
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) {}
-  boxes.forEach(b => { if (id(b) in saved) b.checked = saved[id(b)]; });
-  form.addEventListener("submit", () => {
-    const state = {};
-    boxes.forEach(b => { state[id(b)] = b.checked; });
-    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
-  });
-})();
-</script>
-
-<script>
-(function () {
-  const btn = document.getElementById("select-all-opts");
-  const boxes = () => [...document.querySelectorAll('form.scan input[type=checkbox]')];
-  const count = document.getElementById("opts-count");
-  const update = () => {
-    const on = boxes().filter(b => b.checked);
-    const active = on.filter(b => ["nuclei", "nikto", "wpscan", "takeover", "cloud_scan", "cloud_audit", "authorize_scans"].includes(b.name));
-    count.textContent = `${on.length} of ${boxes().length} selected` + (active.length ? ` (${active.length} intrusive)` : "");
-    btn.textContent = on.length === boxes().length ? "Clear all options" : "Select all options";
-  };
-  btn.addEventListener("click", () => {
-    const all = boxes().every(b => b.checked);
-    boxes().forEach(b => { b.checked = !all; });
-    update();
-  });
-  document.querySelector("form.scan").addEventListener("change", update);
-  update();
-})();
-</script>
+{{ scan_options_script() }}
 
 {% set live = jobs|selectattr("status", "in", ["pending", "running", "cancelling", "interrupted"])|list %}
 {% if live %}

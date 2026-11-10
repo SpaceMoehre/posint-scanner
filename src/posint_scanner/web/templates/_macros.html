@@ -28,3 +28,92 @@
   </tbody>
 </table>
 {% endmacro %}
+
+
+{# The scan options (sources and stages) of a scan form, ticked per `form`
+   (web.scans.form_state). Used by the dashboard's form and the scan modal. #}
+{% macro scan_options(sources, form, open=false) %}
+    <input type="hidden" name="sources_form" value="1">
+    <details class="opts"{{ " open" if open }}>
+    <summary>Sources &amp; stages · <span class="opts-count"></span></summary>
+    <p><button type="button" class="secondary select-all-opts">Select all options</button></p>
+    {% for category in ["passive", "scrape", "active"] %}
+    <div class="source-group">
+      <span class="muted">{{ category }}:</span>
+      {% for s in sources if s.category == category %}
+      <label title="{% if not s.configured %}not configured (no API key) - will be skipped{% elif s.fallback_for %}keyless stand-in for {{ s.fallback_for }}{% endif %}"><input type="checkbox" name="source" value="{{ s.name }}"{% if s.name in form.sources %} checked{% endif %}> {{ s.name }}{% if not s.configured %} <span class="muted">(no key)</span>{% endif %}</label>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    <div class="source-group">
+      <span class="muted">stages:</span>
+      <label title="TCP-connect every port Shodan, Censys etc. reported and drop the ones that don't accept the connection."><input type="checkbox" name="verify_ports"{{ " checked" if form.verify_ports }}> verify reported ports</label>
+      <label><input type="checkbox" name="fingerprint"{{ " checked" if form.fingerprint }}> tech fingerprint</label>
+      <label><input type="checkbox" name="netblock_sweep"{{ " checked" if form.netblock_sweep }}> netblock sweep</label>
+      <label><input type="checkbox" name="vuln_lookup"{{ " checked" if form.vuln_lookup }}> CVE lookup</label>
+      <label title="Active, intrusive template scan of discovered web services. Needs the nuclei binary. Only for hosts you're authorized to test."><input type="checkbox" name="nuclei"{{ " checked" if form.nuclei }}> nuclei scan (active)</label>
+      <label title="Active: the Nikto web-server scanner against every resolved web service. Needs the nikto binary. Only for hosts you're authorized to test."><input type="checkbox" name="nikto"{{ " checked" if form.nikto }}> nikto scan (active)</label>
+      <label title="Active: WPScan against every resolved web service (a fast no-op on non-WordPress sites). Needs the wpscan binary; set webscan.wpscan_api_token for CVE data."><input type="checkbox" name="wpscan"{{ " checked" if form.wpscan }}> wpscan (active)</label>
+      <label title="Check every discovered hostname for a dangling, claimable service (subdomain takeover). Needs the takeover binary."><input type="checkbox" name="takeover"{{ " checked" if form.takeover }}> subdomain takeover</label>
+      <label title="Read the PHP version each web service discloses in its headers (openai/php2shell-checker, one HEAD request each), flag php2shell-vulnerable versions and look up the version's CVEs. Needs the phpcheck wrapper."><input type="checkbox" name="php2shell"{{ " checked" if form.php2shell }}> php2shell check</label>
+      <label title="Credential-free: Checkov + Trivy on the public GitHub repos and container images found for this domain. Needs the trivy/checkov binaries."><input type="checkbox" name="cloud_scan"{{ " checked" if form.cloud_scan }}> cloud artifact scan (trivy/checkov)</label>
+      <label title="Authenticated: Prowler + ScoutSuite against the configured cloud providers, using your environment credentials. Only for accounts you're authorized to audit. Needs the prowler/scout binaries."><input type="checkbox" name="cloud_audit"{{ " checked" if form.cloud_audit }}> cloud account audit (prowler/scoutsuite)</label>
+      <label><input type="checkbox" name="fresh"{{ " checked" if form.fresh }}> fresh (ignore source TTLs)</label>
+      <label><input type="checkbox" name="authorize_scans"{{ " checked" if form.authorize_scans }}> authorize active Qualys scans</label>
+    </div>
+    </details>
+{% endmacro %}
+
+{# Wires every scan form's "select all" button and selection count. Include once per page. #}
+{% macro scan_options_script() %}
+<script>
+document.querySelectorAll("form.scan").forEach(form => {
+  const btn = form.querySelector(".select-all-opts");
+  const count = form.querySelector(".opts-count");
+  const boxes = () => [...form.querySelectorAll("input[type=checkbox]")];
+  const update = () => {
+    const on = boxes().filter(b => b.checked);
+    const active = on.filter(b => ["nuclei", "nikto", "wpscan", "takeover", "cloud_scan", "cloud_audit", "authorize_scans"].includes(b.name));
+    count.textContent = `${on.length} of ${boxes().length} selected` + (active.length ? ` (${active.length} intrusive)` : "");
+    btn.textContent = on.length === boxes().length ? "Clear all options" : "Select all options";
+  };
+  btn.addEventListener("click", () => {
+    const all = boxes().every(b => b.checked);
+    boxes().forEach(b => { b.checked = !all; });
+    update();
+  });
+  form.addEventListener("change", update);
+  update();
+});
+</script>
+{% endmacro %}
+
+{# A modal scan form, opened by any button with data-scan-domain="<name>"
+   on the page. Include once per page. #}
+{% macro scan_modal(sources, form) %}
+<dialog id="scan-modal" class="modal" aria-labelledby="scan-modal-title">
+  <form class="scan" method="post" action="/scans">
+    <h2 id="scan-modal-title">Scan <span class="scan-modal-domain"></span></h2>
+    <input type="hidden" name="domain" value="">
+    {{ scan_options(sources, form, open=true) }}
+    <p class="note">Active stages connect directly to the target. Only scan infrastructure you are authorized to test - check who owns this domain first.</p>
+    <div class="modal-actions">
+      <button type="button" class="secondary" data-close-modal>Cancel</button>
+      <button type="submit">Start scan</button>
+    </div>
+  </form>
+</dialog>
+{{ scan_options_script() }}
+<script>
+(function () {
+  const modal = document.getElementById("scan-modal");
+  const form = modal.querySelector("form");
+  document.querySelectorAll("[data-scan-domain]").forEach(btn => btn.addEventListener("click", () => {
+    form.elements.domain.value = btn.dataset.scanDomain;
+    modal.querySelector(".scan-modal-domain").textContent = btn.dataset.scanDomain;
+    modal.showModal();
+  }));
+  modal.querySelector("[data-close-modal]").addEventListener("click", () => modal.close());
+})();
+</script>
+{% endmacro %}

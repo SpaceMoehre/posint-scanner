@@ -158,6 +158,51 @@ class ScanJob:
         )
 
 
+# Settings key of the last scan's options, which pre-fill the scan forms.
+LAST_OPTIONS = "scan.last_options"
+# The scan forms' stage toggles (ScanOptions fields), in form order.
+STAGES = ("verify_ports", "fingerprint", "netblock_sweep", "vuln_lookup", "nuclei", "nikto",
+          "wpscan", "takeover", "php2shell", "cloud_scan", "cloud_audit", "fresh",
+          "authorize_scans")
+
+
+def remember_options(db: Database, options: ScanOptions, known_sources: list[str]) -> None:
+    """Keep `options` to pre-fill the next scan form (see form_state).
+    `known_sources` are the sources the form offered, so one added later
+    starts at its config default instead of off."""
+    db.set_setting(LAST_OPTIONS, json.dumps(
+        {"options": json.loads(options.to_json()), "known_sources": known_sources}))
+
+
+def form_state(db: Database, sources: list, active_default: bool) -> dict:
+    """What the scan forms start with: the last scan's options (every
+    toggle, the intrusive ones included), else the config defaults.
+    `sources` are registry.describe_sources' rows. Returns the ticked
+    `sources` names and each STAGES toggle."""
+    state: dict = {
+        "sources": {s.name for s in sources if s.enabled},
+        **{stage: False for stage in STAGES},
+        "verify_ports": active_default, "fingerprint": active_default,
+        "php2shell": active_default, "netblock_sweep": True, "vuln_lookup": True,
+    }
+    try:
+        stored = json.loads(db.get_settings().get(LAST_OPTIONS) or "null")
+        if not stored:
+            return state
+        options = ScanOptions.from_json(json.dumps(stored["options"]))
+        known = set(stored.get("known_sources") or [])
+    except (ValueError, KeyError, TypeError):
+        logger.warning("stored scan options unreadable - using the defaults")
+        return state
+    state.update({stage: getattr(options, stage) for stage in STAGES})
+    if options.sources is not None:
+        state["sources"] = {
+            s.name for s in sources
+            if (s.name in options.sources if s.name in known else s.enabled)
+        }
+    return state
+
+
 def run_job(db_path: str, config_path: str, job_id: str, control: ScanControl) -> None:
     """Run the stored job `job_id` to its end, recording its status and
     progress in `scan_jobs`. Runs in the job's own process (ProcessRunner)."""

@@ -55,7 +55,7 @@ from posint_scanner.registry import (
     enrichment_sources,
     filter_by_name,
 )
-from posint_scanner.scope import is_tld_sibling, split_related
+from posint_scanner.scope import domains_in_report, is_tld_sibling, split_related
 from posint_scanner.settings import apply_settings
 from posint_scanner.sources.base import ScrapeParseError, Source, SourceUnavailableError
 from posint_scanner.sources.dnsrecon import SWEEP_WORKERS, sweep_netblocks
@@ -642,6 +642,8 @@ def _persist_tool_reports(db: Database, domain_id: int, result: EnrichmentResult
     tools a source ran."""
     for item in result.tool_reports:
         db.save_tool_output(domain_id, item.tool, item.target, item.report)
+        if item.report is not None:
+            _record_report_domains_logged(db, domain_id, item.tool, item.target, item.report.data)
 
 
 class _ReportSink:
@@ -663,6 +665,59 @@ class _ReportSink:
             self.db.save_tool_output(self.domain_id, self.tool, key, report)
         except Exception:
             logger.exception("failed to store %s report for %s - continuing", self.tool, key)
+        if report is not None:
+            _record_report_domains_logged(self.db, self.domain_id, self.tool, key, report.data)
+
+
+def _record_report_domains_logged(
+    db: Database, domain_id: int, tool: str, target: str, compressed: bytes
+) -> bool:
+    """record_report_domains, logging (not raising) a failure. Whether it worked."""
+    try:
+        record_report_domains(db, domain_id, tool, target, compressed)
+        return True
+    except Exception:
+        logger.exception("could not read the %s report for %s for other domains - continuing",
+                         tool, target)
+        return False
+
+
+# More other domains than this in one report: it's a page dump full of
+# third-party links, not a few related domains - none are recorded.
+REPORT_DOMAIN_LIMIT = 50
+
+
+def record_report_domains(
+    db: Database, domain_id: int, tool: str, target: str, compressed: bytes
+) -> None:
+    """Record the other domains a tool's stored report names (see
+    scope.domains_in_report) as candidate domains of the scanned domain."""
+    rows = db.query("SELECT name FROM domains WHERE id = ?", (domain_id,))
+    if not rows:
+        return
+    text = toolrun.decompress(compressed).decode("utf-8", errors="replace")
+    found = domains_in_report(text, rows[0]["name"])
+    if len(found) > REPORT_DOMAIN_LIMIT:
+        logger.info("%s report for %s names %d other domains - not recording them",
+                    tool, target, len(found))
+        return
+    for name in found:
+        db.upsert_candidate_domain(domain_id, name, tool, target)
+
+
+def collect_stored_report_domains(db: Database) -> None:
+    """record_report_domains over every report stored before reports were
+    read for domains - once per database (until every report was read)."""
+    if db.data_version() >= 2:
+        return
+    complete = True
+    for row in db.query("SELECT id FROM tool_outputs ORDER BY id"):
+        output = db.get_tool_output(row["id"])
+        if output is not None:
+            complete &= _record_report_domains_logged(
+                db, output["domain_id"], output["tool"], output["target"], output["content"])
+    if complete:
+        db.set_data_version(2)  # else the next start tries again
 
 
 def _report_sink(

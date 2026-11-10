@@ -175,6 +175,11 @@ and the resolution + netblock sweep stage (its stale-mapping pruning needs a
 complete pass). Hostnames enrichment would have related to an already-answered
 call are not chased again. Once a job completes, its checkpoints are dropped.
 
+Every scan form - the dashboard's and the *Scan* modal on the overview and
+domain pages - starts with the options of the last scan started (sources and
+every stage, intrusive ones included), stored in the DB; before the first
+scan, with the config defaults.
+
 The dashboard can **delete** a domain with everything scanned for it (IPs
 another domain still resolves to are kept; refused while a scan runs), and
 **download everything** (or the selected domains) as one zip: `results.json`,
@@ -582,11 +587,21 @@ hostnames Shodan/AbuseIPDB associate with it. After enrichment:
   count;
 - **anything else** is reduced to its registrable domain
   (`shop.brand.co.uk` -> `brand.co.uk`) and recorded as a *candidate domain*
-  on the scanned domain - shown on its web UI page with a one-click *Scan*
-  button, in the Obsidian domain note and the JSON export. Candidates are
-  **never scanned automatically**: shared hosting makes reverse-IP data
-  noisy, and a candidate may belong to someone else. A target related to
-  more than 25 other domains is treated as shared hosting and yields none.
+  on the scanned domain - shown on its web UI page and in the security
+  overview's **Other domains found** list (each with a *Scan* button that
+  opens the scan options), in the Obsidian domain note and the JSON export.
+  Candidates are **never scanned automatically**: shared hosting makes
+  reverse-IP data noisy, and a candidate may belong to someone else. A
+  target related to more than 25 other domains is treated as shared hosting
+  and yields none.
+
+Tool reports feed the same list: the domains a stored report names - a
+redirect target, a CNAME, a contact address, a linked site - become candidates
+of the scanned domain, with the tool as their source. Advisory, vendor, CDN,
+analytics and social domains (`scope.REPORT_NOISE_DOMAINS`) and file names
+(`README.md`, `main.tf`) are skipped, and a report naming more than 50 other
+domains (a page dump) yields none. Reports stored before this are read once
+on the next server start.
 
 ### Quotas: TTL, budgets, rate limits
 

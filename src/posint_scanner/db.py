@@ -355,6 +355,18 @@ class Database:
     def close(self) -> None:
         self.conn.close()
 
+    # PRAGMA user_version: 1 - old result runs dropped (_drop_old_result_runs);
+    # 2 - stored tool reports read for other domains
+    # (orchestrator.collect_stored_report_domains).
+    @_locked
+    def data_version(self) -> int:
+        return int(self.conn.execute("PRAGMA user_version").fetchone()[0])
+
+    @_locked
+    def set_data_version(self, version: int) -> None:
+        self.conn.execute(f"PRAGMA user_version = {int(version)}")
+        self.conn.commit()
+
     @_locked
     def query(self, sql: str, params: tuple | list = ()) -> list[sqlite3.Row]:
         """Run one read. The read model (readmodel/queries.py) builds its

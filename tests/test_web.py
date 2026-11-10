@@ -295,10 +295,11 @@ class TestReadPages:
         r = TestClient(app).get("/domains/dns-net.de")
         assert "brand.co.uk" in r.text
         assert "virustotal" in r.text
-        assert 'name="domain" value="brand.co.uk"' in r.text  # one-click scan form
-        # the one-click scan runs the default stages, not a stripped-down scan
+        assert 'data-scan-domain="brand.co.uk"' in r.text  # opens the scan modal
+        # which starts at the default stages, not a stripped-down scan
+        modal = r.text[r.text.index('<dialog id="scan-modal"'):]
         for stage in ("netblock_sweep", "vuln_lookup", "verify_ports", "fingerprint", "php2shell"):
-            assert f'name="{stage}" value="on"' in r.text
+            assert f'name="{stage}" checked' in modal
 
     def test_missing_ip_returns_404(self, client):
         assert client.get("/ips/9.9.9.9").status_code == 404

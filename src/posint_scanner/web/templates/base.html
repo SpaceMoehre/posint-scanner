@@ -51,6 +51,15 @@
     form.scan label { display: inline-flex; align-items: center; gap: 5px; margin: 4px 14px 4px 0; font-size: 14px; }
     form.scan .source-group { margin: 2px 0; }
     form.scan .source-group > .muted { display: inline-block; min-width: 64px; font-size: 13px; }
+    form.scan details.opts { margin-top: 12px; }
+    form.scan details.opts > summary { cursor: pointer; color: var(--muted); font-size: 14px; width: fit-content; }
+    form.scan details.opts > summary:hover { color: var(--fg); }
+    form.scan details.opts[open] > summary { margin-bottom: 8px; }
+    dialog.modal { background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 8px;
+                   padding: 18px 20px; width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+    dialog.modal::backdrop { background: rgba(0, 0, 0, .55); }
+    dialog.modal h2 { margin-top: 0; }
+    dialog.modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
     input[type=text], input[type=search], input[type=password] { background: var(--panel2); border: 1px solid var(--border); color: var(--fg); padding: 8px 10px; border-radius: 6px; min-width: min(260px, 100%); max-width: 100%; }
     input.wide { width: min(420px, 60vw); }
     button { background: var(--link); color: #0f1419; border: 1px solid transparent; padding: 9px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: filter .15s, background-color .15s, transform .05s; }

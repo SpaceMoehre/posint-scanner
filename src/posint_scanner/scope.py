@@ -15,6 +15,7 @@ Those count as the target's own and are scanned in the same run.
 from __future__ import annotations
 
 import ipaddress
+import re
 from collections.abc import Iterable
 
 import tldextract
@@ -93,3 +94,72 @@ def split_related(domain: str, names: Iterable[str]) -> tuple[list[str], list[st
         if registrable and registrable != domain and registrable not in candidates:
             candidates.append(registrable)
     return hostnames, candidates
+
+
+# Domains a tool report names for reasons other than the target: advisories
+# and CVE databases, tool and software vendors, package registries, and the
+# CDNs, fonts, analytics and social widgets a scanned page embeds.
+REPORT_NOISE_DOMAINS = frozenset("""
+    nist.gov mitre.org cve.org first.org cisa.gov cert.org cert.at bsi.bund.de
+    exploit-db.com packetstormsecurity.com securityfocus.com rapid7.com tenable.com
+    snyk.io vulners.com cvedetails.com hackerone.com huntr.dev huntr.com wpscan.com
+    wpvulndb.com patchstack.com wordfence.com owasp.org portswigger.net
+    projectdiscovery.io aquasec.com bridgecrew.io checkov.io prowler.com nccgroup.com
+    cirt.net zaproxy.org
+    github.com githubusercontent.com gitlab.com bitbucket.org
+    sourceforge.net
+    apache.org nginx.org php.net python.org golang.org go.dev nodejs.org npmjs.com
+    npmjs.org pypi.org rubygems.org packagist.org maven.org crates.io nuget.org
+    docker.com docker.io quay.io gcr.io k8s.io kubernetes.io
+    microsoft.com windows.com oracle.com redhat.com fedoraproject.org debian.org
+    ubuntu.com canonical.com suse.com opensuse.org alpinelinux.org centos.org
+    wordpress.org wordpress.com wp.com w.org drupal.org joomla.org
+    openssl.org openssh.com curl.se haxx.se mozilla.org mozilla.net
+    w3.org ietf.org rfc-editor.org iana.org schema.org ogp.me json-schema.org
+    wikipedia.org stackoverflow.com stackexchange.com medium.com
+    google.com googleapis.com gstatic.com googleusercontent.com google-analytics.com
+    googletagmanager.com googlesyndication.com doubleclick.net recaptcha.net
+    youtube.com ytimg.com
+    cloudflare.com cloudflareinsights.com jsdelivr.net unpkg.com jquery.com
+    bootstrapcdn.com fontawesome.com typekit.net gravatar.com
+    facebook.com facebook.net fbcdn.net instagram.com twitter.com x.com twimg.com
+    linkedin.com licdn.com pinterest.com tiktok.com
+    hotjar.com segment.com segment.io newrelic.com nr-data.net sentry.io
+    example.com example.net example.org
+""".split())
+
+# Public suffixes that are also common file extensions (README.md, setup.py,
+# main.tf, Makefile.in, module.info, a Struts login.do): a bare two-label
+# name with one of these outside a URL is a file name.
+_FILE_LIKE_SUFFIXES = frozenset(
+    "md py sh tf zip mov pl pm rs ps so in am ac cc mk ms info me sc ws do ai app mp".split()
+)
+
+_HOSTNAME = re.compile(
+    r"(?<![\w-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62})(?![\w-])",
+    re.IGNORECASE,
+)
+
+
+def domains_in_report(text: str, domain: str) -> list[str]:
+    """The registrable domains other than `domain`'s own that a tool's raw
+    report names (redirect targets, CNAMEs, contact addresses, linked
+    sites), in first-seen order - minus REPORT_NOISE_DOMAINS and names that
+    are really file names. TLD siblings are included."""
+    found: list[str] = []
+    for match in _HOSTNAME.finditer(text):
+        name = match.group(1).lower().rstrip(".")
+        if in_scope(name, domain):
+            continue
+        labels = name.split(".")
+        in_url = text[max(0, match.start() - 2):match.start()] == "//"
+        if not in_url and len(labels) == 2 and labels[1] in _FILE_LIKE_SUFFIXES:
+            continue
+        # Every parent: googleapis.com is a private suffix, so
+        # fonts.googleapis.com is registrable on its own.
+        if any(".".join(labels[i:]) in REPORT_NOISE_DOMAINS for i in range(len(labels))):
+            continue
+        registrable = registrable_domain(name)
+        if registrable and registrable != domain and registrable not in found:
+            found.append(registrable)
+    return found

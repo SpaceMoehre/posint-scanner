@@ -255,7 +255,7 @@
 
 {% if d.candidates %}
 <h2>Candidate domains ({{ d.candidates|length }})</h2>
-<p class="note">Other domains sources related to this one's hosts (reverse IP, PTR, shared certificates). Not scanned - review ownership before scanning any of them.</p>
+<p class="note">Other domains sources related to this one's hosts (reverse IP, PTR, shared certificates) or its tools' reports named (redirects, CNAMEs, contacts). Not scanned - review ownership before scanning any of them.</p>
 <table class="dt">
   <thead><tr><th>Domain</th><th data-filter="select">Source</th><th>Seen via</th><th data-filter="none"></th></tr></thead>
   <tbody>
@@ -265,17 +265,12 @@
     <td>{{ c.source }}</td>
     <td class="muted">{{ c.via }}</td>
     <td>{% if c.scanned %}<span class="muted">scanned</span>{% else %}
-      <form class="inline" method="post" action="/scans">
-        <input type="hidden" name="domain" value="{{ c.name }}">
-        <input type="hidden" name="netblock_sweep" value="on">
-        <input type="hidden" name="vuln_lookup" value="on">
-        {% if active_default %}<input type="hidden" name="verify_ports" value="on"><input type="hidden" name="fingerprint" value="on"><input type="hidden" name="php2shell" value="on">{% endif %}
-        <button type="submit">Scan</button>
-      </form>
+      <button type="button" data-scan-domain="{{ c.name }}">Scan</button>
     {% endif %}</td>
   </tr>
   {% endfor %}
   </tbody>
 </table>
 {% endif %}
+{{ macros.scan_modal(sources, form) }}
 {% endblock %}

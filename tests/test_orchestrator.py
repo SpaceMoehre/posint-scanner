@@ -5,8 +5,9 @@ from unittest.mock import ANY, patch
 
 import pytest
 
+from posint_scanner import toolrun
 from posint_scanner.db import Database
-from posint_scanner.models import DiscoveredHostname, EnrichmentResult, ServiceInfo
+from posint_scanner.models import DiscoveredHostname, EnrichmentResult, ServiceInfo, ToolReport
 from posint_scanner.orchestrator import (
     Checkpoints,
     ScanControl,
@@ -955,6 +956,30 @@ class TestNucleiStage:
         assert scan_with(lambda *a, **kw: []) == [finding]
         assert scan_with(_completes([])) == []  # a completed clean run clears them
 
+    def test_other_domains_in_its_report_become_candidates(self, db, no_live_fingerprint):
+        no_live_fingerprint.return_value = {
+            "url": "http://1.2.3.4:8080/", "status": 200, "technologies": {}, "categories": {},
+            "cpes": {}, "server_product": None, "server_version": None,
+        }
+        report_text = ('{"matched-at": "http://1.2.3.4:8080/", '
+                       '"response": "Location: https://pay.partner-shop.net/checkout", '
+                       '"reference": ["https://nvd.nist.gov/vuln/detail/CVE-2024-1"]}')
+
+        def scan(targets, report=None):
+            report("http://1.2.3.4:8080/", toolrun.compress_text(report_text))
+            return [{"template_id": "x", "severity": "info"}]
+
+        with (
+            patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]),
+            patch("posint_scanner.nuclei.NucleiScanner.available", True),
+            patch("posint_scanner.nuclei.NucleiScanner.scan", side_effect=scan),
+        ):
+            run_scan(db, ["example.com"], [FakeDiscoverySource(), self._fp_source()],
+                     netblock_sweep=False, vuln_lookup=False, nuclei_scan=True)
+        domain_id = db.get_domain_by_name("example.com")["id"]
+        assert [(c["name"], c["source"], c["via"]) for c in db.list_candidate_domains(domain_id)] == [
+            ("partner-shop.net", "nuclei", "1.2.3.4")]
+
     def test_scans_fingerprinted_urls_and_persists_findings(self, db, no_live_fingerprint):
         # fingerprint stage yields a webtech result with a URL; nuclei scans it
         no_live_fingerprint.return_value = {
@@ -1666,6 +1691,26 @@ class TestAutomaticContinuation:
             run_scan(db, ["brand-new.example.com"], [FakeDiscoverySource()],
                      netblock_sweep=False, vuln_lookup=False, tech_fingerprint=False)
         mock_reval.assert_not_called()
+
+
+class TestReportDomainsFromSources:
+    def test_a_sources_tool_report_is_read_for_other_domains(self, db):
+        class ToolSource(FakeIpEnrichSource):
+            name = "tool-source"
+
+            def enrich(self, target, hostnames):
+                result = super().enrich(target, hostnames)
+                result.tool_reports = [ToolReport(
+                    tool="sometool", target=target,
+                    report=toolrun.compress_text("redirect: https://www.partner-site.org/"))]
+                return result
+
+        with patch("posint_scanner.orchestrator.resolve_hostname", return_value=["1.2.3.4"]):
+            run_scan(db, ["example.com"], [FakeDiscoverySource(), ToolSource()],
+                     netblock_sweep=False, vuln_lookup=False)
+        domain_id = db.get_domain_by_name("example.com")["id"]
+        assert [(c["name"], c["source"]) for c in db.list_candidate_domains(domain_id)] == [
+            ("partner-site.org", "sometool")]
 
 
 class CountingIpEnrichSource(FakeIpEnrichSource):

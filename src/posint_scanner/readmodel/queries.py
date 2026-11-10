@@ -198,6 +198,27 @@ def secret_exposures(db: Database, domain_ids: Collection[int]) -> dict[int, lis
     return _group(rows, "domain_id")
 
 
+def other_domains(db: Database, domain: str | None = None) -> list[dict]:
+    """The candidate domains not scanned yet (of `domain`'s scans, or all),
+    one row per name: which scanned domains led to it (`found_for`), which
+    sources or tools named it, one place it was seen and when last."""
+    only = "AND d.name = ?" if domain else ""
+    rows = db.query(
+        "SELECT c.name, group_concat(DISTINCT d.name) AS found_for, "
+        "group_concat(DISTINCT c.source) AS sources, MIN(c.via) AS via, "
+        "MAX(c.last_seen) AS last_seen FROM candidate_domains c "
+        "JOIN domains d ON d.id = c.domain_id "
+        f"WHERE c.name NOT IN (SELECT name FROM domains) {only} "
+        "GROUP BY c.name ORDER BY c.name",
+        (domain,) if domain else (),
+    )
+    return [
+        {**dict(r), "found_for": sorted(r["found_for"].split(",")),
+         "sources": sorted(r["sources"].split(","))}
+        for r in rows
+    ]
+
+
 def count_by_domain(db: Database, table: str, extra: str = "") -> dict[int, int]:
     """domain id -> rows of `table` (hostnames, code_exposures, ...) it owns."""
     rows = db.query(

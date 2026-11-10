@@ -127,6 +127,7 @@ def build_overview(db: Database, domain: str | None = None) -> dict:
         "vuln_rows": vuln_rows,
         "hosts_with_vulns": len({v["address"] for v in vuln_rows}),
         "criticals": criticals,
+        "other_domains": queries.other_domains(db, domain),
     }
 
 

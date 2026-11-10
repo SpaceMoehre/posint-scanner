@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import scan_modal %}
 {% block title %}Security Overview · posint-scanner{% endblock %}
 {% block head %}
 <style>
@@ -118,4 +119,25 @@
   </tbody>
 </table>
 {% else %}<p class="muted">None found.</p>{% endif %}
+
+<h2 id="other-domains">Other domains found ({{ ov.other_domains|length }})</h2>
+<p class="note">Domains not scanned yet that sources related to the scanned ones (reverse IP, PTR, shared certificates) or that tools' reports named (redirects, CNAMEs, contacts). Review who owns one before scanning it.</p>
+{% if ov.other_domains %}
+<table class="dt">
+  <thead><tr><th>Domain</th><th data-filter="select">Found while scanning</th><th data-filter="select">Named by</th><th>Seen via</th><th>Last seen</th><th data-filter="none"></th></tr></thead>
+  <tbody>
+  {% for c in ov.other_domains %}
+  <tr>
+    <td>{{ c.name }}</td>
+    <td data-values="{{ c.found_for|join('|') }}">{{ dtags(c.found_for) }}</td>
+    <td data-values="{{ c.sources|join('|') }}">{{ c.sources|join(", ") }}</td>
+    <td class="muted">{{ c.via|truncate(60) }}</td>
+    <td class="muted">{{ c.last_seen[:10] }}</td>
+    <td><button type="button" data-scan-domain="{{ c.name }}">Scan</button></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">None found.</p>{% endif %}
+{{ scan_modal(sources, form) }}
 {% endblock %}

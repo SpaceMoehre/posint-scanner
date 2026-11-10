@@ -13,9 +13,11 @@ exposure to untrusted networks.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +39,7 @@ from posint_scanner.config import load_config
 from posint_scanner.db import PerThreadDatabase
 from posint_scanner.export.findings_report import render_report
 from posint_scanner.export.zip_export import write_zip
+from posint_scanner.orchestrator import collect_stored_report_domains
 from posint_scanner.registry import describe_sources
 from posint_scanner.settings import (
     AppSettings,
@@ -48,7 +51,9 @@ from posint_scanner.settings import (
     source_secret_fields,
 )
 from posint_scanner.readmodel import views
-from posint_scanner.web.scans import ScanManager, ScanOptions
+from posint_scanner.web.scans import ScanManager, ScanOptions, form_state, remember_options
+
+logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Report formats that aren't plain JSON, for the download's file name.
@@ -78,6 +83,17 @@ def create_app(
     # first scan has written anything.
     databases = PerThreadDatabase(db_path)
     databases.get().init_schema()
+    # Reports stored before they were read for other domains (once per DB),
+    # off the startup path: there may be many to decompress.
+    def collect() -> None:
+        try:
+            collect_stored_report_domains(databases.get())
+        except Exception:
+            logger.exception("could not collect the domains named in stored tool reports")
+
+    collector = threading.Thread(target=collect, name="report-domains", daemon=True)
+    collector.start()
+    app.state.report_domains_collector = collector
     app.state.db = databases
     db = databases.get
     app.state.manager = manager
@@ -85,20 +101,25 @@ def create_app(
     def page(name: str, request: Request, status_code: int = 200, **ctx) -> HTMLResponse:
         return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 
-    @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request) -> HTMLResponse:
+    def scan_form() -> dict:
+        """What a page with a scan form (the dashboard's, the scan modal's)
+        renders it from: the source toggles and their pre-filled state."""
         config = load_config(config_path)
         # Fold in web-UI keys so registry sources show their true configured
         # state here (NVD/WPScan aren't registry sources - their status shows
         # on the Settings page instead).
         apply_source_secrets(config, db())
+        sources = describe_sources(config)
+        return {"sources": sources, "form": form_state(db(), sources, config.defaults.active)}
+
+    @app.get("/", response_class=HTMLResponse)
+    def dashboard(request: Request) -> HTMLResponse:
         return page(
             "dashboard.html",
             request,
             data=views.build_dashboard(db()),
             jobs=[j.as_dict() for j in manager.list()],
-            sources=describe_sources(config),
-            active_default=config.defaults.active,
+            **scan_form(),
         )
 
     @app.post("/scans")
@@ -143,6 +164,9 @@ def create_app(
             fresh=fresh,
         )
         job = manager.start(domain, options)
+        if sources_form:  # a full scan form: its choices pre-fill the next one
+            known = [s.name for s in describe_sources(load_config(config_path))]
+            remember_options(db(), options, known)
         return RedirectResponse(f"/scans/{job.id}", status_code=303)
 
     @app.get("/scans/{job_id}", response_class=HTMLResponse)
@@ -330,19 +354,15 @@ def create_app(
 
     @app.get("/overview", response_class=HTMLResponse)
     def overview(request: Request, domain: str | None = None) -> HTMLResponse:
-        return page("overview.html", request, ov=views.build_overview(db(), domain or None))
+        return page("overview.html", request, ov=views.build_overview(db(), domain or None),
+                    **scan_form())
 
     @app.get("/domains/{name}", response_class=HTMLResponse)
     def domain(request: Request, name: str) -> HTMLResponse:
         data = views.build_domain(db(), name)
         if data is None:
             return page("not_found.html", request, status_code=404, what=f"domain {name}")
-        return page(
-            "domain.html",
-            request,
-            d=data,
-            active_default=load_config(config_path).defaults.active,
-        )
+        return page("domain.html", request, d=data, **scan_form())
 
     @app.get("/hosts/{name}", response_class=HTMLResponse)
     def host(request: Request, name: str) -> HTMLResponse:
