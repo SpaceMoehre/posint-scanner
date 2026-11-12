@@ -30,7 +30,7 @@ def db(tmp_path):
                     "cvss_severity": "CRITICAL", "summary": "Apache path traversal | RCE"}
     for ip in (ip1, ip2):  # the same CVE on two IPs
         database.insert_result("nvd", "ip", ip, {"port": 443, "technology": "Apache 2.4.49",
-                                                "cpe": "c", "cves": [critical_cve]})
+                                                "cpe": "cpe:/a:apache:http_server:2.4.49", "cves": [critical_cve]})
     database.insert_result("nuclei", "ip", ip2, {
         "template_id": "git-config", "name": "Exposed .git/config", "severity": "high",
         "matched_at": "https://api.example.com/.git/config", "cves": []})
@@ -112,6 +112,18 @@ class TestRender:
             "security_headers": {"findings": [
                 {"severity": "medium", "title": "Weak CSP | unsafe-inline", "detail": "a|b"}]}})
         assert "Weak CSP \\| unsafe-inline" in render_report(db, now=NOW)
+
+    @pytest.mark.parametrize("cvss, severity", [(9.8, "CRITICAL"), (5.3, "MEDIUM")])
+    def test_a_long_cve_description_is_kept_whole(self, db, cvss, severity):
+        summary = "An issue was discovered in Example Server. " * 20 + "The end."
+        ip = db.upsert_ip("203.0.113.9")
+        host = db.upsert_hostname(db.get_domain_by_name("example.com")["id"], "old.example.com")
+        db.upsert_resolution(host, ip)
+        db.insert_result("nvd", "ip", ip, {"port": 80, "technology": "Example 1.0", "cpe": "cpe:/a:example:server:1.0",
+                                          "cves": [{"cve_id": "CVE-2026-0001", "cvss_score": cvss,
+                                                    "cvss_severity": severity,
+                                                    "summary": summary}]})
+        assert summary.strip() in render_report(db, now=NOW)
 
     def test_empty_database(self, tmp_path):
         with Database(tmp_path / "e.db") as empty:

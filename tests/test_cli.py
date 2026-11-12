@@ -113,6 +113,18 @@ class TestExportCommand:
         assert result.exit_code == 0
         assert output_path.exists()
 
+    def test_obsidian_export_writes_a_zip(self, tmp_path):
+        import zipfile
+
+        db_path = tmp_path / "test.db"
+        runner.invoke(app, ["db", "init", "--db", str(db_path)])
+        output_path = tmp_path / "vault.zip"
+        result = runner.invoke(
+            app, ["export", "--format", "obsidian", "--output", str(output_path), "--db", str(db_path)]
+        )
+        assert result.exit_code == 0
+        assert zipfile.ZipFile(output_path).namelist() == ["_Overview.md"]
+
 
 class TestQueryCommand:
     def test_unknown_host_returns_exit_code_1(self, tmp_path):

@@ -38,7 +38,7 @@ from posint_scanner import proxy, toolrun
 from posint_scanner.config import load_config
 from posint_scanner.db import PerThreadDatabase
 from posint_scanner.export.findings_report import render_report
-from posint_scanner.export.zip_export import write_zip
+from posint_scanner.export.zip_export import write_vault_zip, write_zip
 from posint_scanner.orchestrator import collect_stored_report_domains
 from posint_scanner.registry import describe_sources
 from posint_scanner.settings import (
@@ -205,14 +205,13 @@ def create_app(
             return JSONResponse({"error": "not found"}, status_code=404)
         return JSONResponse(job.as_dict())
 
-    @app.get("/export.zip")
-    def export_zip(domain: list[str] = Query([])) -> FileResponse:
-        """`domain` (repeatable) limits the export to those domains; none
-        means everything."""
+    def zip_download(write, name: str, domains: list[str]) -> FileResponse:
+        """`write(db, path, domains=...)` into a temp zip, served as
+        `name`-<timestamp>.zip and deleted once sent."""
         fd, path = tempfile.mkstemp(suffix=".zip")
         os.close(fd)
         try:
-            write_zip(db(), path, domains=domain or None)
+            write(db(), path, domains=domains or None)
         except Exception:
             os.unlink(path)
             raise
@@ -220,9 +219,20 @@ def create_app(
         return FileResponse(
             path,
             media_type="application/zip",
-            filename=f"posint-export-{stamp}.zip",
+            filename=f"{name}-{stamp}.zip",
             background=BackgroundTask(os.unlink, path),
         )
+
+    @app.get("/export.zip")
+    def export_zip(domain: list[str] = Query([])) -> FileResponse:
+        """`domain` (repeatable) limits the export to those domains; none
+        means everything."""
+        return zip_download(write_zip, "posint-export", domain)
+
+    @app.get("/obsidian.zip")
+    def obsidian_zip(domain: list[str] = Query([])) -> FileResponse:
+        """The Obsidian vault alone; `domain` as for /export.zip."""
+        return zip_download(write_vault_zip, "posint-obsidian", domain)
 
     @app.get("/findings.md")
     def findings_report(domain: list[str] = Query([])) -> Response:

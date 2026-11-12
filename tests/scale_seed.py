@@ -35,7 +35,8 @@ def seed(db: Database, domains: int, ips_per_domain: int, rescans: int = 1) -> N
             db.upsert_service(ip, 3306, "tcp", "MySQL 8.0")
             for _ in range(rescans):
                 db.insert_result("nvd", "ip", ip, {
-                    "port": 443, "technology": "Apache 2.4.49", "cpe": "c",
+                    "port": 443, "technology": "Apache 2.4.49",
+                    "cpe": "cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*",
                     "cves": [{"cve_id": "CVE-2021-41773", "cvss_score": 9.8,
                               "cvss_severity": "CRITICAL", "summary": "path traversal"}]})
                 db.insert_result("nuclei", "ip", ip, {

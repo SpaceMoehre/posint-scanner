@@ -74,6 +74,7 @@
   <div class="actions">
     <button type="submit" class="secondary" id="export-btn" title="JSON, CSV, Obsidian markdown vault and a copy of the database">Export all (zip)</button>
     <button type="submit" class="secondary" id="report-btn" formaction="/findings.md" title="One markdown file: critical and high findings in full, medium as a table">Findings report (md)</button>
+    <button type="submit" class="secondary" id="vault-btn" formaction="/obsidian.zip" title="Obsidian vault: a note per host (IP, or hostname with several IPs), per domain, and an overview">Obsidian vault (zip)</button>
     <span class="sep"></span>
     <input type="text" name="group" list="group-names" maxlength="80" placeholder="group name" aria-label="Group name">
     <datalist id="group-names">{% for n in data.group_names %}<option value="{{ n }}">{% endfor %}</datalist>
@@ -121,6 +122,7 @@
   // Name the selection on the buttons that act on it.
   const exportBtn = document.getElementById("export-btn");
   const reportBtn = document.getElementById("report-btn");
+  const vaultBtn = document.getElementById("vault-btn");
   const msg = document.getElementById("group-msg");
   const name = document.querySelector('#export input[name=group]');
   const needSel = document.querySelectorAll("[data-needs-selection]");
@@ -128,6 +130,7 @@
     const n = document.querySelectorAll(".export-sel:checked").length;
     if (exportBtn) exportBtn.textContent = n ? `Export ${n} selected (zip)` : "Export all (zip)";
     if (reportBtn) reportBtn.textContent = n ? `Findings report, ${n} selected (md)` : "Findings report (md)";
+    if (vaultBtn) vaultBtn.textContent = n ? `Obsidian vault, ${n} selected (zip)` : "Obsidian vault (zip)";
     needSel.forEach(b => { b.disabled = !n; });
     if (msg) msg.textContent = "";
   }

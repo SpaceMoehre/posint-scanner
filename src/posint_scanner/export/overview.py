@@ -79,16 +79,20 @@ def _smbv1(banner: str | None) -> bool:
     return bool(banner) and "smb version: 1" in banner.lower()
 
 
-def _ip_link(address: str) -> str:
-    # IP notes live in IPs/ but Obsidian wikilinks resolve by basename, so the
-    # bare address is enough and matches how the IP notes are named.
-    return f"[[{address}]]"
+def _link(name: str, note_for: dict[str, str] | None, in_table: bool = True) -> str:
+    """A wikilink to the host note covering `name` (see obsidian_export:
+    an IP's own note, or the note of a hostname spanning several IPs).
+    Obsidian resolves wikilinks by basename, so the note name is enough."""
+    note = (note_for or {}).get(name, name)
+    if note == name:
+        return f"[[{name}]]"
+    return f"[[{note}{'\\|' if in_table else '|'}{name}]]"
 
 
-def _hostnames_cell(hostnames: list[str]) -> str:
+def _hostnames_cell(hostnames: list[str], note_for: dict[str, str] | None = None) -> str:
     if not hostnames:
         return "-"
-    shown = ", ".join(f"[[{h}]]" for h in hostnames[:3])
+    shown = ", ".join(_link(h, note_for) for h in hostnames[:3])
     if len(hostnames) > 3:
         shown += f" +{len(hostnames) - 3} more"
     return shown
@@ -184,7 +188,7 @@ def _collect(hosts: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
     return exposures, vuln_rows, criticals
 
 
-def render_overview_note(hosts: list[dict]) -> str:
+def render_overview_note(hosts: list[dict], note_for: dict[str, str] | None = None) -> str:
     """Render `_Overview.md` from the per-host findings (see _collect for the
     `hosts` shape). Always returns a valid note, even when nothing risky was
     found - an explicit "nothing found" reads better than an empty file."""
@@ -224,7 +228,7 @@ def render_overview_note(hosts: list[dict]) -> str:
         for finding in criticals:
             names = _hostnames_cell(finding["hostnames"])
             lines.append(
-                f"- **{finding['kind']}** — {_ip_link(finding['address'])} "
+                f"- **{finding['kind']}** — {_link(finding['address'], note_for, in_table=False)} "
                 f"({names}): {finding['detail']}"
             )
     else:
@@ -239,7 +243,7 @@ def render_overview_note(hosts: list[dict]) -> str:
         ]
         for e in exposures:
             lines.append(
-                f"| {_ip_link(e['address'])} | {_hostnames_cell(e['hostnames'])} "
+                f"| {_link(e['address'], note_for)} | {_hostnames_cell(e['hostnames'], note_for)} "
                 f"| {e['port']}/{e['protocol']} | {e['service']} | {e['reason']} |"
             )
     else:
@@ -256,7 +260,7 @@ def render_overview_note(hosts: list[dict]) -> str:
             score = f"{v['max_score']:.1f}" if v["max_score"] else "-"
             port = f"{v['port']}" if v["port"] is not None else "-"
             lines.append(
-                f"| {_ip_link(v['address'])} | {_hostnames_cell(v['hostnames'])} "
+                f"| {_link(v['address'], note_for)} | {_hostnames_cell(v['hostnames'], note_for)} "
                 f"| {port} | {v['component']} | {v['cve_count']} | {score} | {v['worst']} |"
             )
     else:

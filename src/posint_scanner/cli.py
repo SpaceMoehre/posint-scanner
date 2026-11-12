@@ -444,7 +444,7 @@ def export_command(
     format: str = typer.Option("obsidian", "--format", help="obsidian | json | csv | findings"),
     output: str = typer.Option(
         ..., "--output",
-        help="Output path (directory for obsidian, file for json/csv/findings).",
+        help="Output file (a .zip for obsidian).",
     ),
     db_path: str = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
 ) -> None:

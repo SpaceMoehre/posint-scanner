@@ -27,7 +27,6 @@ from posint_scanner.readmodel.queries import Scope
 
 # Locations listed per merged finding before "+N more".
 MAX_WHERE = 8
-DETAIL_CHARS = 300
 
 
 def _severity(value: object) -> str:
@@ -48,7 +47,7 @@ def _finding(severity: object, category: str, title: str, where: str,
         "category": category,
         "title": " ".join(str(title or "-").split()),
         "where": where,
-        "detail": " ".join(str(detail or "").split())[:DETAIL_CHARS],
+        "detail": " ".join(str(detail or "").split()),
         "reference": reference,
     }
 
@@ -227,7 +226,7 @@ def render_report(db: Database, domains: Collection[str] | None = None,
     if group:
         lines += ["| Category | Finding | Where | Detail |", "|---|---|---|---|"]
         lines += [f"| {_cell(f['category'])} | {_cell(f['title'])} | {_cell(_wheres(f['wheres']))} "
-                  f"| {_cell(f['detail'][:160])} |" for f in group]
+                  f"| {_cell(f['detail'])} |" for f in group]
     else:
         lines.append("None found.")
     lines.append("")

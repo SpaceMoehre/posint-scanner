@@ -22,7 +22,7 @@ def seeded_db(tmp_path):
         db.upsert_service(ip_id, 135, "tcp", "Microsoft RPC Endpoint Mapper")
         db.insert_result(
             "nvd", "ip", ip_id,
-            {"port": 445, "technology": "SMB", "cpe": "c",
+            {"port": 445, "technology": "SMB", "cpe": "cpe:/a:samba:samba:3.0.20",
              "cves": [{"cve_id": "CVE-2017-0144", "cvss_score": 9.3,
                        "cvss_severity": "CRITICAL", "summary": "EternalBlue"}]},
         )
@@ -672,6 +672,21 @@ class TestDeleteAndExport:
             f"vault/Domains/{every[0]}.md"]
 
 
+    def test_obsidian_vault_download(self, client):
+        import io
+        import zipfile
+
+        r = client.get("/obsidian.zip")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/zip"
+        assert "posint-obsidian-" in r.headers["content-disposition"]
+        names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+        assert "_Overview.md" in names
+        assert any(n.startswith("Hosts/") for n in names)
+        assert not any(n.startswith("IPs/") for n in names)
+        assert 'formaction="/obsidian.zip"' in client.get("/").text
+
+
 class TestDashboardUsability:
     def test_running_scans_are_listed_up_top(self, client):
         job = {"id": "j1", "domain": "busy.com", "status": "running", "stage": "enrichment",
@@ -858,7 +873,7 @@ class TestExploitColumn:
         with Database(seeded_db) as db:
             ip_id = db.get_ip_by_address("212.86.33.249")["id"]
             db.insert_result("nvd", "ip", ip_id, {
-                "port": 445, "technology": "SMB", "cpe": "c",
+                "port": 445, "technology": "SMB", "cpe": "cpe:/a:samba:samba:3.0.20",
                 "cves": [{
                     "cve_id": "CVE-2017-0144", "cvss_score": 9.3, "cvss_severity": "CRITICAL",
                     "summary": "EternalBlue",

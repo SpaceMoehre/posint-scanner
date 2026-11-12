@@ -484,21 +484,26 @@ localStorage), and only against hosts you are authorized to test. Configure unde
 
 ## Export structure
 
-The Obsidian report is flat folders per entity type, not nested by DNS
-depth - relationships are frontmatter properties, wikilinks, and tags
-instead, since that supports cross-cutting queries (by port, by source, by
-finding) that a folder tree can't:
+The Obsidian report is one zip (`export --format obsidian --output
+vault.zip`, or the dashboard's **Obsidian vault (zip)** button, for all or
+the selected domains) with a note per host - not nested by DNS depth:
+relationships are frontmatter properties, wikilinks, and tags, which support
+cross-cutting queries (by port, by source, by finding) that a folder tree
+can't:
 
 ```
-vault/
-  Domains/example.com.md        - apex domain, links to its hostnames
-  Hosts/api.example.com.md      - one flat note per hostname: parent domain,
-                                   resolved IPs, every source's results
-  IPs/1.2.3.4.md                 - one note per unique IP: services, results,
-                                   backlinked from every hostname resolving to it
+_Overview.md                    - exposures, CVEs, critical findings, linking
+                                   to the host notes
+Domains/example.com.md          - apex domain, links each hostname to the
+                                   note of its host
+Hosts/1.2.3.4.md                - one host: an IP with its services, every
+                                   source's results, and the hostnames on it
+Hosts/www.example.com.md        - a hostname resolving to several IPs is one
+                                   host covering all of them
 ```
 
-Regenerated (overwritten) on every export - it's a view of the SQLite
+A hostname on one IP is part of that IP's note; hostnames on the same set of
+IPs share one note. Built fresh on every export - a view of the SQLite
 database, never hand-edited or read back.
 
 ## Sources
